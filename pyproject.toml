@@ -42,6 +42,9 @@ package-dir = {"" = "uninfra"}
 "*" = ["*.*"]
 
 
+[tool.black]
+line-length = 200
+preview = 1
 
 
 # Mypy
