@@ -3,7 +3,9 @@ Uninfra: Pure Python Configuration Management.
 """
 
 import argparse
+import hashlib
 import os
+import shutil
 import subprocess
 from string import Template
 
@@ -85,23 +87,81 @@ def file_needs_update(src, dst):
 
 
 class Directory:
-    def __init__(self, path):
+    def __init__(self, path, exists=True):
         self.path = os.path.expanduser(path)
+        self.exists = exists
 
     def run(self):
+        if self.exists:
+            self.run_positive()
+        else:
+            self.run_negative()
+
+    def run_positive(self):
         if os.path.isdir(self.path):
             print(f"Skipping directory creation of {self.path} because it already exists.")
-            return
-        run(["mkdir", "-p", self.path])
+        else:
+            run(["mkdir", "-p", self.path])
+
+    def run_negative(self):
+        if not os.path.isdir(self.path):
+            print(f"Skipping directory removal of {self.path} because it doesn't exist.")
+        else:
+            run(["rm", "-rf", self.path])
+
+
+class File:
+    def __init__(self, path, src=None, contents=None, exists=True):
+        if not src and not contents:
+            contents = ""
+
+        self.path = os.path.expanduser(path)
+        self.src = os.path.expanduser(src) if src else None
+        self.contents = contents
+        self.exists = exists
+
+    def run(self):
+        if self.exists:
+            self.run_positive()
+        else:
+            self.run_negative()
+
+    def run_positive(self):
+        if self.src:
+            if file_needs_update(self.src, self.path):
+                shutil.copy(self.src, self.path)
+            else:
+                print(f"Skipped copying of {self.src!r} to {self.path!r} because files match.")
+        else:
+            is_bytes = isinstance(contents, bytes)
+            needs_update = True
+            if os.path.exists(self.path):
+                needs_update = checksum(self.path) == hashlib.sha256(self.contents if is_bytes else self.contents.encode())
+            if needs_update:
+                with open(self.path, "wb" if is_bytes else "w") as f:
+                    f.write(self.contents)
+            else:
+                print(f"Skipped writing of {self.path!r} because checksum matches contents.")
+
+    def run_negative(self):
+        if os.path.isfile(self.path):
+            os.unlink(self.path)
+        else:
+            print(f"Skipping removal of {self.path!r} beacause it does not exist.")
 
 
 class User:
-    def __init__(self, username, groups=None, shell=None, home=None, system=False):
+    def __init__(self, username, groups=None, shell=None, home=None, system=False, exists=True):
         self.username = username
         self.wanted_groups = groups or []
         self.shell = shell
         self.home = home
         self.system = system
+        self.exists = exists
+
+    def pre_run(self):
+        (status, out, err) = run_with_output(["id", self.username])
+        self.user_already_exists = status == 0 and "uid=" in out
 
     def get_current_groups(self):
         """Get list of groups user belongs to."""
@@ -112,11 +172,16 @@ class User:
             raise RuntimeError(f"Got unexpected response from `groups`: {(status, out, err)!r}.")
 
     def run(self):
-        # Check if user exists
-        (status, out, err) = run_with_output(["id", self.username])
-        user_exists = status == 0 and "uid=" in out
+        self.pre_run()
+        if self.exists:
+            self.run_positive()
+        else:
+            self.run_negative()
 
-        if not user_exists:
+    def run_positive(self):
+        if self.user_already_exists:
+            print(f"Skipping user creation for {self.username!r} because user already exists.")
+        else:
             cmd = ["sudo", "useradd"]
             if self.system:
                 cmd.append("--system")
@@ -128,8 +193,6 @@ class User:
                 cmd.extend(["--groups", ",".join(self.wanted_groups)])
             cmd.append(self.username)
             run(cmd)
-        else:
-            print(f"Skipping user creation for {self.username!r} because user already exists.")
 
         if self.wanted_groups:
             current_groups = self.get_current_groups()
@@ -140,6 +203,12 @@ class User:
                 run(["sudo", "usermod", "-a", "-G", group, self.username])
             for group in groups_to_remove:
                 run(["sudo", "gpasswd", "-d", self.username, group])
+
+    def run_negative(self):
+        if self.user_already_exists:
+            run(["sudo", "userdel", "-r", self.username])
+        else:
+            print(f"Skipping user deletion for {self.username!r} because user doesn't exist.")
 
 
 class Download:
@@ -155,9 +224,13 @@ class Download:
 
 
 class AptPackage:
-    def __init__(self, name, provides=None):
+    def __init__(self, name, provides=None, exists=True):
         self.name = name
         self.provides = os.path.expanduser(provides) if provides else None
+        self.exists = exists
+
+    def pre_run(self):
+        self.package_already_installed = self.is_installed()
 
     def is_installed(self):
         (_, output, _) = run_with_output(["dpkg-query", "-W", "-f='${Status}'", self.name])
@@ -169,20 +242,29 @@ class AptPackage:
             raise RuntimeError(f"Unable to parse dkpg-query result: {output!r}.")
 
     def run(self):
-        install = False
-        if self.provides:
-            if os.path.isfile(self.provides):
-                print(f"Skipping apt install of {self.name} because {self.provides} exists.")
-            else:
-                install = True
+        self.pre_run()
+        if self.exists:
+            self.run_positive()
         else:
-            if self.is_installed():
-                print(f"Skipping apt install of {self.name} because it's already installed.")
-            else:
-                install = True
+            self.run_negative()
 
-        if install:
+    def run_positive(self):
+        needs_install = False
+        if self.provides and not os.path.isfile(self.provides):
+            needs_install = True
+        elif not self.package_already_installed:
+            needs_install = True
+
+        if needs_install:
             run(["sudo", "apt-get", "install", "-y", self.name])
+        else:
+            print(f"Skipping package install of {self.name} because it's already installed.")
+
+    def run_negative(self):
+        if self.package_already_installed:
+            run(["sudo", "apt-get", "remove", "-y", self.name])
+        else:
+            print(f"Skipping package removal of {self.name} because it's not installed.")
 
 
 class Virtualenv:
@@ -217,10 +299,20 @@ class Command:
 def demo():
     steps = [
         AptPackage("nginx", provides="/usr/sbin/nginx"),
+        AptPackage("nginx", exists=False),
+        AptPackage("nginx", exists=False),
+        AptPackage("nginx"),
+        Directory("/tmp/foo/bar"),
+        Directory("/tmp/foo/bar", exists=False),
+        Directory("/tmp/foo/bar", exists=False),
         Directory("/tmp/foo/bar"),
         Download("http://lost-theory.org/robots.txt", provides="/tmp/foo/bar/robots.txt"),
         Virtualenv("/usr/bin/python3", "~/testing-env"),
         Command("/bin/bash", "-c", "date | tee -a /tmp/foo/out.log"),
+        User("app"),
+        User("app", exists=False),
+        Directory("/tmp/app-home/"),
+        User("app", groups=["foo"], shell="/bin/bash", home="/tmp/app-home/"),
     ]
     for step in steps:
         step.run()
@@ -255,8 +347,8 @@ def push(remote, task_name):
     assert output.strip() == "True", "Invalid remote python version. Need >=3.6.0."
 
     # Push and run
-    run(["scp", __file__, "{}:/tmp/cm.py".format(remote)])
-    run(["ssh", "-A", remote, f"python3 -u /tmp/cm.py --run --task={task_name}"])
+    run(["scp", __file__, "{}:/tmp/uninfra.py".format(remote)])
+    run(["ssh", "-A", remote, f"python3 -u /tmp/uninfra.py --run --task={task_name}"])
 
 
 def main():
