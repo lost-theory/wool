@@ -27,7 +27,6 @@ dev = []
 [project.urls]
 
 bugs = "https://github.com/lost-theory/uninfra/issues"
-changelog = "https://github.com/lost-theory/uninfra/blob/master/changelog.md"
 homepage = "https://github.com/lost-theory/uninfra"
 
 [tool.setuptools]
