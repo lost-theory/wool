@@ -1,2 +1,4 @@
-pip==19.2.3
-coverage==4.5.4
+pip<26
+coverage<4.6
+pytest<8.4
+black<26.0
