@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 from string import Template
+from pathlib import Path
 
 # XXX: some code I once used for writing Nginx configs using a `Template`, with "idempotency check"
 """
@@ -88,7 +89,7 @@ def file_needs_update(src, dst):
 
 class Directory:
     def __init__(self, path, exists=True):
-        self.path = os.path.expanduser(path)
+        self.path = Path(path).expanduser()
         self.exists = exists
 
     def run(self):
@@ -98,13 +99,13 @@ class Directory:
             self.run_negative()
 
     def run_positive(self):
-        if os.path.isdir(self.path):
+        if self.path.is_dir():
             print(f"Skipping directory creation of {self.path} because it already exists.")
         else:
             run(["mkdir", "-p", self.path])
 
     def run_negative(self):
-        if not os.path.isdir(self.path):
+        if not self.path.is_dir():
             print(f"Skipping directory removal of {self.path} because it doesn't exist.")
         else:
             run(["rm", "-rf", self.path])
@@ -115,8 +116,8 @@ class File:
         if not src and not contents:
             contents = ""
 
-        self.path = os.path.expanduser(path)
-        self.src = os.path.expanduser(src) if src else None
+        self.path = Path(path).expanduser()
+        self.src = Path(src).expanduser() if src else None
         self.contents = contents
         self.exists = exists
 
@@ -133,9 +134,9 @@ class File:
             else:
                 print(f"Skipped copying of {self.src!r} to {self.path!r} because files match.")
         else:
-            is_bytes = isinstance(contents, bytes)
+            is_bytes = isinstance(self.contents, bytes)
             needs_update = True
-            if os.path.exists(self.path):
+            if self.path.exists():
                 needs_update = checksum(self.path) == hashlib.sha256(self.contents if is_bytes else self.contents.encode())
             if needs_update:
                 with open(self.path, "wb" if is_bytes else "w") as f:
@@ -144,7 +145,7 @@ class File:
                 print(f"Skipped writing of {self.path!r} because checksum matches contents.")
 
     def run_negative(self):
-        if os.path.isfile(self.path):
+        if self.path.is_file():
             os.unlink(self.path)
         else:
             print(f"Skipping removal of {self.path!r} beacause it does not exist.")
@@ -159,9 +160,12 @@ class User:
         self.system = system
         self.exists = exists
 
-    def pre_run(self):
+    def is_present(self):
         (status, out, err) = run_with_output(["id", self.username])
-        self.user_already_exists = status == 0 and "uid=" in out
+        return status == 0 and "uid=" in out
+
+    def pre_run(self):
+        self.user_already_exists = self.is_present()
 
     def get_current_groups(self):
         """Get list of groups user belongs to."""
@@ -214,32 +218,44 @@ class User:
 class Download:
     def __init__(self, url, provides):
         self.url = url
-        self.provides = os.path.expanduser(provides)
+        self.provides = Path(provides).expanduser()
 
     def run(self):
-        if os.path.isfile(self.provides):
+        if self.provides.is_file():
             print(f"Skipping download {self.url} because {self.provides} exists.")
             return
         run(["curl", "-o", self.provides, self.url])
 
 
+def apt_pkg_is_installed(name):
+    (_, output, _) = run_with_output(["dpkg-query", "-W", "-f='${Status}'", name])
+    if "ok not-installed" in output:
+        return False
+    elif "ok installed" in output:
+        return True
+    else:
+        raise RuntimeError(f"Unable to parse dkpg-query result: {output!r}.")
+
+
+def apt_pkg_install(name):
+    run(["sudo", "apt-get", "install", "-y", name])
+
+
+def apt_pkg_remove(name):
+    run(["sudo", "apt-get", "remove", "-y", name])
+
+
 class AptPackage:
     def __init__(self, name, provides=None, exists=True):
         self.name = name
-        self.provides = os.path.expanduser(provides) if provides else None
+        self.provides = Path(provides).expanduser() if provides else None
         self.exists = exists
 
     def pre_run(self):
         self.package_already_installed = self.is_installed()
 
     def is_installed(self):
-        (_, output, _) = run_with_output(["dpkg-query", "-W", "-f='${Status}'", self.name])
-        if "ok not-installed" in output:
-            return False
-        elif "ok installed" in output:
-            return True
-        else:
-            raise RuntimeError(f"Unable to parse dkpg-query result: {output!r}.")
+        return apt_pkg_is_installed(self.name)
 
     def run(self):
         self.pre_run()
@@ -250,34 +266,34 @@ class AptPackage:
 
     def run_positive(self):
         needs_install = False
-        if self.provides and not os.path.isfile(self.provides):
+        if self.provides and not self.provides.is_file():
             needs_install = True
         elif not self.package_already_installed:
             needs_install = True
 
         if needs_install:
-            run(["sudo", "apt-get", "install", "-y", self.name])
+            apt_pkg_install(self.name)
         else:
             print(f"Skipping package install of {self.name} because it's already installed.")
 
     def run_negative(self):
         if self.package_already_installed:
-            run(["sudo", "apt-get", "remove", "-y", self.name])
+            apt_pkg_remove(self.name)
         else:
             print(f"Skipping package removal of {self.name} because it's not installed.")
 
 
 class Virtualenv:
     def __init__(self, python_bin, path):
-        self.python_bin = os.path.expanduser(python_bin)
-        self.venv_path = os.path.expanduser(path)
-        self.pip_path = os.path.join(self.venv_path, "bin/pip")
+        self.python_bin = Path(python_bin).expanduser()
+        self.path = Path(path).expanduser()
+        self.pip_path = self.path / "bin/pip"
 
     def run(self):
-        if os.path.exists(self.venv_path):
-            print(f"Skipping venv creation of {self.venv_path} because it already exists.")
+        if self.path.exists():
+            print(f"Skipping venv creation of {self.path} because it already exists.")
             return
-        run([self.python_bin, "-mvenv", self.venv_path])
+        run([self.python_bin, "-mvenv", self.path])
 
     # TODO: make a method for this?
     # run([pip_path, "install", "-r", os.path.join(repo_path, "requirements.txt")])
