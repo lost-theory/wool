@@ -1,5 +1,5 @@
 """
-Uninfra: Pure Python Configuration Management.
+Woolwork: Pure Python Configuration Management.
 """
 
 import argparse
@@ -363,8 +363,8 @@ def push(remote, task_name):
     assert output.strip() == "True", "Invalid remote python version. Need >=3.6.0."
 
     # Push and run
-    run(["scp", __file__, "{}:/tmp/uninfra.py".format(remote)])
-    run(["ssh", "-A", remote, f"python3 -u /tmp/uninfra.py --run --task={task_name}"])
+    run(["scp", __file__, "{}:/tmp/woolpush.py".format(remote)])
+    run(["ssh", "-A", remote, f"python3 -u /tmp/woolpush.py --run --task={task_name}"])
 
 
 def main():

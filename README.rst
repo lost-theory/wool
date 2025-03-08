@@ -1,6 +1,6 @@
-=======
-Uninfra
-=======
+========
+Woolwork
+========
 
 Pure Python configuration management.
 
