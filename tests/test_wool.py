@@ -48,50 +48,50 @@ class TestWoolwork(unittest.TestCase):
         dirname = self.root / TEST_DIR_CREATE_NAME
         d = Directory(dirname)
         assert not d.path.is_dir()
-        d.run()
+        d.apply()
         assert d.path.is_dir()
         d = Directory(dirname, exists=False)
-        d.run()
+        d.apply()
         assert not d.path.is_dir()
 
     def test_existing_dir_destroy(self):
         d = Directory(self.existing_dir_for_destroy, exists=False)
         assert d.path.is_dir()
-        d.run()
+        d.apply()
         assert not d.path.is_dir()
 
     def test_file_contents_create_destroy(self):
         destpath = self.root / TEST_FILE_CONTENTS_NAME
         f = File(destpath, contents=TEST_FILE_CONTENTS)
         assert not f.path.is_file()
-        f.run()
+        f.apply()
         assert f.path.is_file()
         with open(f.path) as test_file:
             contents_on_disk = test_file.read()
         assert contents_on_disk == TEST_FILE_CONTENTS
         f = File(destpath, exists=False)
         assert f.path.is_file()
-        f.run()
+        f.apply()
         assert not f.path.is_file()
 
     def test_file_src_create_destroy(self):
         destpath = self.root / TEST_FILE_DEST_NAME
         f = File(destpath, src=self.existing_file_for_src)
         assert not f.path.is_file()
-        f.run()
+        f.apply()
         assert f.path.is_file()
         with open(f.path) as test_file:
             contents_on_disk = test_file.read()
         assert contents_on_disk == TEST_FILE_SRC
         f = File(destpath, exists=False)
         assert f.path.is_file()
-        f.run()
+        f.apply()
         assert not f.path.is_file()
 
     def test_existing_file_destroy(self):
         f = File(self.existing_file_for_destroy, exists=False)
         assert f.path.is_file()
-        f.run()
+        f.apply()
         assert not f.path.is_file()
 
     def test_user_create_destroy(self):
@@ -100,11 +100,11 @@ class TestWoolwork(unittest.TestCase):
         username = f"test-{timestamp}-{unique_name}"
         u = User(username)
         assert not u.is_present()
-        u.run()
+        u.apply()
         assert u.is_present()
         u = User(username, exists=False)
         assert u.is_present()
-        u.run()
+        u.apply()
         assert not u.is_present()
 
     @patch("woolwork.wool.apt_pkg_is_installed")
@@ -115,7 +115,7 @@ class TestWoolwork(unittest.TestCase):
         p = AptPackage("cool-pkg")
         assert not p.is_installed()
         assert f_installed.called
-        p.run()
+        p.apply()
         assert f_install.called and f_install.call_count == 1
         assert f_install.call_args.args[0] == "cool-pkg"
         assert not f_remove.called
@@ -128,7 +128,7 @@ class TestWoolwork(unittest.TestCase):
         p = AptPackage("boo-pkg", exists=False)
         assert p.is_installed()
         assert f_installed.called
-        p.run()
+        p.apply()
         assert f_remove.called and f_remove.call_count == 1
         assert f_remove.call_args.args[0] == "boo-pkg"
         assert not f_install.called
@@ -137,14 +137,14 @@ class TestWoolwork(unittest.TestCase):
         dest = self.root / "robots.txt"
         d = Download("http://lost-theory.org/robots.txt", dest)
         assert not dest.is_file()
-        d.run()
+        d.apply()
         assert dest.is_file()
 
     def test_virtualenv(self):
         dest = self.root / "testing-env"
         v = Virtualenv(sys.executable, dest)
         assert not dest.is_dir()
-        v.run()
+        v.apply()
         assert dest.is_dir()
         assert v.pip_path.is_file()
 
@@ -153,7 +153,7 @@ class TestWoolwork(unittest.TestCase):
         contents = "hey whats up"
         c = Command("/bin/bash", "-c", f'echo "{contents}" | tee -a {dest}')
         assert not dest.is_file()
-        c.run()
+        c.apply()
         assert dest.is_file()
         with open(dest) as f:
             contents_on_disk = f.read()
