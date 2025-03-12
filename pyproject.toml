@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "woolwork"
+name = "wool"
 version = "0.0.1"
 description = "Pure Python configuration management."
 readme = "README.rst"
@@ -30,7 +30,7 @@ bugs = "https://github.com/lost-theory/uninfra/issues"
 homepage = "https://github.com/lost-theory/uninfra"
 
 [tool.setuptools]
-package-dir = {"" = "woolwork"}
+package-dir = {"" = "wool"}
 
 [tool.setuptools.package-data]
 "*" = ["*.*"]

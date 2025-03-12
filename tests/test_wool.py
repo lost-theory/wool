@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from woolwork.wool import Directory, File, User, Download, AptPackage, Virtualenv, Command
+from wool.wool import Directory, File, User, Download, AptPackage, Virtualenv, Command
 
 TEST_DIR_EXISTS_NAME = "foo"
 TEST_DIR_CREATE_NAME = "bah"
@@ -22,7 +22,7 @@ TEST_FILE_SRC = "Hello world from src!\n"
 TEST_FILE_CONTENTS = "Hello world from contents!\n"
 
 
-class TestWoolwork(unittest.TestCase):
+class TestWool(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
@@ -107,9 +107,9 @@ class TestWoolwork(unittest.TestCase):
         u.apply()
         assert not u.is_present()
 
-    @patch("woolwork.wool.apt_pkg_is_installed")
-    @patch("woolwork.wool.apt_pkg_install")
-    @patch("woolwork.wool.apt_pkg_remove")
+    @patch("wool.wool.apt_pkg_is_installed")
+    @patch("wool.wool.apt_pkg_install")
+    @patch("wool.wool.apt_pkg_remove")
     def test_apt_pkg_create(self, f_remove, f_install, f_installed):
         f_installed.return_value = False
         p = AptPackage("cool-pkg")
@@ -120,9 +120,9 @@ class TestWoolwork(unittest.TestCase):
         assert f_install.call_args.args[0] == "cool-pkg"
         assert not f_remove.called
 
-    @patch("woolwork.wool.apt_pkg_is_installed")
-    @patch("woolwork.wool.apt_pkg_install")
-    @patch("woolwork.wool.apt_pkg_remove")
+    @patch("wool.wool.apt_pkg_is_installed")
+    @patch("wool.wool.apt_pkg_install")
+    @patch("wool.wool.apt_pkg_remove")
     def test_apt_pkg_destroy(self, f_remove, f_install, f_installed):
         f_installed.return_value = True
         p = AptPackage("boo-pkg", exists=False)

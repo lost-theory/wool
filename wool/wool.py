@@ -1,5 +1,5 @@
 """
-Woolwork: Pure Python Configuration Management.
+Wool: Pure Python Configuration Management.
 """
 
 import argparse
