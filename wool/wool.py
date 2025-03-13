@@ -7,6 +7,8 @@ import hashlib
 import os
 import shutil
 import subprocess
+import grp
+import pwd
 from string import Template
 from pathlib import Path
 
@@ -264,22 +266,18 @@ class User(Resource):
         self.exists = exists
 
     def is_present(self):
-        (status, out, err) = shell_output(["id", self.username])
-        return status == 0 and "uid=" in out
-
-    def before_apply(self):
-        self.user_already_exists = self.is_present()
+        try:
+            u = pwd.getpwnam(self.username)
+            return True
+        except KeyError:
+            return False
 
     def get_current_groups(self):
         """Get list of groups user belongs to."""
-        (status, out, err) = shell_output(["groups", self.username])
-        if status == 0:
-            return out.split(":")[1].strip().split()
-        else:
-            raise RuntimeError(f"Got unexpected response from `groups`: {(status, out, err)!r}.")
+        return set(g.gr_name for g in grp.getgrall() if self.username in g.gr_mem)
 
     def create(self):
-        if self.user_already_exists:
+        if self.is_present():
             print(f"Skipping user creation for {self.username!r} because user already exists.")
         else:
             cmd = ["sudo", "useradd"]
@@ -307,7 +305,7 @@ class User(Resource):
                 shell(["sudo", "gpasswd", "-d", self.username, group])
 
     def destroy(self):
-        if self.user_already_exists:
+        if self.is_present():
             shell(["sudo", "userdel", "-r", self.username])
         else:
             print(f"Skipping user deletion for {self.username!r} because user doesn't exist.")
@@ -320,14 +318,14 @@ class Group(Resource):
         self.exists = exists
 
     def is_present(self):
-        (status, out, err) = shell_output(["getent", "group", self.groupname])
-        return status == 0 and self.groupname in out
-
-    def before_apply(self):
-        self.group_already_exists = self.is_present()
+        try:
+            g = grp.getgrnam(self.groupname)
+            return True
+        except KeyError:
+            return False
 
     def create(self):
-        if self.group_already_exists:
+        if self.is_present():
             print(f"Skipping group creation for {self.groupname!r} because group already exists.")
             return
         cmd = ["sudo", "groupadd"]
@@ -337,7 +335,7 @@ class Group(Resource):
         shell(cmd)
 
     def destroy(self):
-        if self.group_already_exists:
+        if self.is_present():
             shell(["sudo", "groupdel", self.groupname])
         else:
             print(f"Skipping group deletion for {self.groupname!r} because group doesn't exist.")

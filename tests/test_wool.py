@@ -132,7 +132,14 @@ class TestWool(unittest.TestCase):
         timestamp = datetime.now().strftime("%Y%m%d")
         unique_name = "".join(random.sample(string.ascii_lowercase, 14))
         username = f"test-{timestamp}-{unique_name}"
-        u = User(username)
+        u = User(
+            username,
+            system=True,
+            shell="/sbin/nologin",
+            home=self.root / "home",
+            group='floppy',
+            groups=['cdrom'],
+        )
         assert not u.is_present()
         u.apply()
         assert u.is_present()
