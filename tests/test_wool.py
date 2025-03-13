@@ -1,42 +1,79 @@
 #!/usr/bin/env python
 
 import os
-import tempfile
-import unittest
 import random
 import string
+import subprocess
 import sys
+import tempfile
+import unittest
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from wool.wool import Resource, SimpleResource, Directory, File, User, Download, AptPackage, Virtualenv, Command
+from wool.wool import Resource, SimpleResource, Directory, File, User, Download, AptPackage, Virtualenv, Command, shell, shell_output, checksum, checksum_bytes, file_needs_update
 
-TEST_DIR_EXISTS_NAME = "foo"
-TEST_DIR_CREATE_NAME = "bah"
-TEST_FILE_EXISTS_NAME = "bar.txt"
-TEST_FILE_SRC_NAME = "baz.txt"
-TEST_FILE_DEST_NAME = "qux.txt"
-TEST_FILE_CONTENTS_NAME = "haha.txt"
 TEST_FILE_SRC = "Hello world from src!\n"
 TEST_FILE_CONTENTS = "Hello world from contents!\n"
 
+class TestWoolUtils(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.TemporaryDirectory()
+        cls.root = Path(cls.tmpdir.name)
+        cls.path1 = cls.root / "file1.txt"
+        cls.path2 = cls.root / "file2.txt"
+        cls.path3 = cls.root / "file3.txt"
 
-class TestWool(unittest.TestCase):
+        cls.path1.write_text(TEST_FILE_SRC)
+        cls.path2.write_text(TEST_FILE_SRC)
+        cls.path3.write_text("")
 
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmpdir.cleanup()
+
+    def test_shell_success(self):
+        shell(["stat", self.path1])
+
+    def test_shell_failure(self):
+        with self.assertRaises(subprocess.CalledProcessError):
+            shell(["stat", self.root / "this-doesnt-exist"])
+
+    def test_shell_output_success(self):
+        (status, out, err) = shell_output(["stat", self.path1])
+        assert status == 0
+        assert "File:" in out
+        assert err == ""
+
+    def test_shell_output_failure(self):
+        (status, out, err) = shell_output(["stat", self.root / "this-doesnt-exist"])
+        assert status != 0
+        assert "File:" not in out
+        assert "cannot stat" in err
+
+    def test_checksum_path_vs_bytes(self):
+        assert checksum(self.path1) == checksum_bytes(TEST_FILE_SRC.encode())
+
+    def test_file_needs_update(self):
+        assert file_needs_update(self.path1, self.root / "this-doesnt-exist") == True
+        assert file_needs_update(self.path1, self.path2) == False
+        assert file_needs_update(self.path1, self.path3) == True
+
+class TestWoolResources(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmpdir = tempfile.TemporaryDirectory()
         cls.root = Path(cls.tmpdir.name)
 
-        cls.existing_dir_for_destroy = cls.root / TEST_DIR_EXISTS_NAME
+        cls.existing_dir_for_destroy = cls.root / "foo"
         os.mkdir(cls.existing_dir_for_destroy)
 
-        cls.existing_file_for_src = cls.root / TEST_FILE_SRC_NAME
+        cls.existing_file_for_src = cls.root / "baz.txt"
         with open(cls.existing_file_for_src, "w") as f:
             f.write(TEST_FILE_SRC)
 
-        cls.existing_file_for_destroy = cls.root / TEST_FILE_EXISTS_NAME
+        cls.existing_file_for_destroy = cls.root / "bar.txt"
         with open(cls.existing_file_for_destroy, "w") as f:
             f.write("This will be deleted very soon... It's not read anywhere.")
 
@@ -79,7 +116,7 @@ class TestWool(unittest.TestCase):
         assert g.state == 'applied'
 
     def test_dir_create_and_destroy(self):
-        dirname = self.root / TEST_DIR_CREATE_NAME
+        dirname = self.root / "bah"
         d = Directory(dirname)
         assert not d.path.is_dir()
         d.apply()
@@ -95,7 +132,7 @@ class TestWool(unittest.TestCase):
         assert not d.path.is_dir()
 
     def test_file_contents_create_destroy(self):
-        destpath = self.root / TEST_FILE_CONTENTS_NAME
+        destpath = self.root / "haha.txt"
         f = File(destpath, contents=TEST_FILE_CONTENTS)
         assert not f.path.is_file()
         f.apply()
@@ -109,7 +146,7 @@ class TestWool(unittest.TestCase):
         assert not f.path.is_file()
 
     def test_file_src_create_destroy(self):
-        destpath = self.root / TEST_FILE_DEST_NAME
+        destpath = self.root / "qux.txt"
         f = File(destpath, src=self.existing_file_for_src)
         assert not f.path.is_file()
         f.apply()

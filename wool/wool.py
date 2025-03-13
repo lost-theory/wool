@@ -123,6 +123,8 @@ def checksum(path):
     checksum, _ = subprocess.check_output(["sha256sum", path], text=True).strip().split()
     return checksum
 
+def checksum_bytes(b):
+    return hashlib.sha256(b).hexdigest()
 
 def file_needs_update(src, dst):
     if not os.path.exists(dst):
@@ -241,7 +243,7 @@ class File(Resource):
             is_bytes = isinstance(self.contents, bytes)
             needs_update = True
             if self.path.exists():
-                needs_update = checksum(self.path) != hashlib.sha256(self.contents if is_bytes else self.contents.encode()).hexdigest()
+                needs_update = checksum(self.path) != checksum_bytes(self.contents if is_bytes else self.contents.encode())
             if needs_update:
                 with open(self.path, "wb" if is_bytes else "w") as f:
                     f.write(self.contents)
