@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from wool.wool import Directory, File, User, Download, AptPackage, Virtualenv, Command
+from wool.wool import Resource, SimpleResource, Directory, File, User, Download, AptPackage, Virtualenv, Command
 
 TEST_DIR_EXISTS_NAME = "foo"
 TEST_DIR_CREATE_NAME = "bah"
@@ -43,6 +43,40 @@ class TestWool(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.tmpdir.cleanup()
+
+    def test_metaclass_exists_required_by_init(self):
+        with self.assertRaises(TypeError) as context:
+            class BadResource(Resource):
+                def __init__(self):
+                    self.foo = 1
+        assert "must be defined with 'exists' kwarg" in str(context.exception)
+
+    def test_metaclass_resource(self):
+        class GoodResource(Resource):
+            def __init__(self, exists=True):
+                self.exists = exists
+                self.state = 'nothing'
+
+            def create(self):
+                self.state = 'created'
+
+            def destroy(self):
+                self.state = 'destroyed'
+
+        g = GoodResource()
+        g.apply()
+        assert g.state == 'created'
+
+    def test_metaclass_simple_resource(self):
+        class GoodSimpleResource(SimpleResource):
+            def __init__(self):
+                self.state = 'nothing'
+
+            def apply(self):
+                self.state = 'applied'
+        g = GoodSimpleResource()
+        g.apply()
+        assert g.state == 'applied'
 
     def test_dir_create_and_destroy(self):
         dirname = self.root / TEST_DIR_CREATE_NAME
