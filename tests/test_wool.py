@@ -11,10 +11,14 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from wool.wool import Resource, SimpleResource, Directory, File, User, Download, AptPackage, Virtualenv, Command, shell, shell_output, checksum, checksum_bytes, file_needs_update
+from wool.wool import Resource, SimpleResource, Directory, File, User, Group, Download, AptPackage, Virtualenv, Command, shell, shell_output, checksum, checksum_bytes, file_needs_update
 
 TEST_FILE_SRC = "Hello world from src!\n"
 TEST_FILE_CONTENTS = "Hello world from contents!\n"
+
+
+def uniq():
+    return "".join(random.sample(string.ascii_lowercase, 14))
 
 
 class TestWoolUtils(unittest.TestCase):
@@ -67,6 +71,7 @@ class TestWoolResources(unittest.TestCase):
     def setUpClass(cls):
         cls.tmpdir = tempfile.TemporaryDirectory()
         cls.root = Path(cls.tmpdir.name)
+        cls.timestamp = datetime.now().strftime("%Y%m%d")
 
         cls.existing_dir_for_destroy = cls.root / "foo"
         os.mkdir(cls.existing_dir_for_destroy)
@@ -92,7 +97,7 @@ class TestWoolResources(unittest.TestCase):
 
         assert "must be defined with 'exists' kwarg" in str(context.exception)
 
-    def test_metaclass_resource(self):
+    def test_metaclass_for_resource(self):
         class GoodResource(Resource):
             def __init__(self, exists=True):
                 self.exists = exists
@@ -108,7 +113,7 @@ class TestWoolResources(unittest.TestCase):
         g.apply()
         assert g.state == "created"
 
-    def test_metaclass_simple_resource(self):
+    def test_metaclass_for_simple_resource(self):
         class GoodSimpleResource(SimpleResource):
             def __init__(self):
                 self.state = "nothing"
@@ -171,11 +176,9 @@ class TestWoolResources(unittest.TestCase):
         assert not f.path.is_file()
 
     def test_user_create_destroy(self):
-        timestamp = datetime.now().strftime("%Y%m%d")
-        unique_name = "".join(random.sample(string.ascii_lowercase, 14))
-        username = f"test-{timestamp}-{unique_name}"
+        name = f"test-{self.timestamp}-{uniq()}"
         u = User(
-            username,
+            name,
             system=True,
             shell="/sbin/nologin",
             home=self.root / "home",
@@ -185,10 +188,21 @@ class TestWoolResources(unittest.TestCase):
         assert not u.is_present()
         u.apply()
         assert u.is_present()
-        u = User(username, exists=False)
+        u = User(name, exists=False)
         assert u.is_present()
         u.apply()
         assert not u.is_present()
+
+    def test_group_create_destroy(self):
+        name = f"tgrp-{self.timestamp}-{uniq()}"
+        g = Group(name, system=True)
+        assert not g.is_present()
+        g.apply()
+        assert g.is_present()
+        g = Group(name, exists=False)
+        assert g.is_present()
+        g.apply()
+        assert not g.is_present()
 
     @patch("wool.wool.apt_pkg_is_installed")
     @patch("wool.wool.apt_pkg_install")
