@@ -183,15 +183,10 @@ class ResourceMeta(type):
 
 class Resource(metaclass=ResourceMeta):
     def apply(self):
-        self.before_apply()
         if self.exists:
             self.create()
         else:
             self.destroy()
-
-    def before_apply(self):
-        """Used to gather state that is needed in both create & destroy."""
-        pass
 
     def create(self):
         """Create/enable/etc. the resource when exists=True."""
@@ -375,9 +370,6 @@ class AptPackage(Resource):
         self.provides = Path(provides).expanduser() if provides else None
         self.exists = exists
 
-    def before_apply(self):
-        self.package_already_installed = self.is_installed()
-
     def is_installed(self):
         return apt_pkg_is_installed(self.name)
 
@@ -385,7 +377,7 @@ class AptPackage(Resource):
         needs_install = False
         if self.provides and not self.provides.is_file():
             needs_install = True
-        elif not self.package_already_installed:
+        elif not self.is_installed():
             needs_install = True
 
         if needs_install:
@@ -394,7 +386,7 @@ class AptPackage(Resource):
             print(f"Skipping package install of {self.name} because it's already installed.")
 
     def destroy(self):
-        if self.package_already_installed:
+        if self.is_installed():
             apt_pkg_remove(self.name)
         else:
             print(f"Skipping package removal of {self.name} because it's not installed.")
