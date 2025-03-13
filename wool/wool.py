@@ -26,7 +26,7 @@ if file_needs_update(src="/tmp/app.conf", dst="/etc/nginx/conf.d/app.conf"):
 
 ## caddy ######################################################################
 
-CADDYFILE_AMBIX = '''
+CADDYFILE_AMBIX = """
 {
     auto_https off
     http_port 80
@@ -41,7 +41,7 @@ CADDYFILE_AMBIX = '''
         }
     }
 }
-'''
+"""
 
 ## start systemd code #########################################################
 
@@ -103,17 +103,18 @@ if file_needs_update(src=gunicorn_service_src, dst=gunicorn_service_dst):
 
 ## utils ######################################################################
 
+
 def shell(cmd, **kw):
-    '''Runs `cmd`, raising an error if it fails.'''
+    """Runs `cmd`, raising an error if it fails."""
     print("Running: {} with {}".format(cmd, kw))
     subprocess.check_call(cmd, **kw)
 
 
 def shell_output(cmd, **kw):
-    '''
+    """
     Runs `cmd`, returning (returncode, stdout, stderr). Does not raise an error
     on command failure.
-    '''
+    """
     print("Getting output from: {} with {}".format(cmd, kw))
     result = subprocess.run(cmd, **kw, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     return (result.returncode, result.stdout, result.stderr)
@@ -123,8 +124,10 @@ def checksum(path):
     checksum, _ = subprocess.check_output(["sha256sum", path], text=True).strip().split()
     return checksum
 
+
 def checksum_bytes(b):
     return hashlib.sha256(b).hexdigest()
+
 
 def file_needs_update(src, dst):
     if not os.path.exists(dst):
@@ -133,11 +136,14 @@ def file_needs_update(src, dst):
         return True
     return False
 
+
 def apt_pkg_install(name):
     shell(["sudo", "apt-get", "install", "-y", name])
 
+
 def apt_pkg_remove(name):
     shell(["sudo", "apt-get", "remove", "-y", name])
+
 
 def apt_pkg_is_installed(name):
     (status, out, err) = shell_output(["dpkg-query", "-W", "-f='${Status}'", name])
@@ -150,25 +156,30 @@ def apt_pkg_is_installed(name):
     else:
         raise RuntimeError(f"Unable to parse dkpg-query result: {output!r}.")
 
+
 ## resource base classes ######################################################
+
 
 class ResourceMeta(type):
     """Metaclass to validate Resource subclasses."""
+
     def __new__(mcs, name, bases, attrs):
         # Skip validation for the baseclasses.
-        if name == 'Resource' or name == "SimpleResource":
+        if name == "Resource" or name == "SimpleResource":
             return super().__new__(mcs, name, bases, attrs)
 
         # Check that subclasses of Resource (but not SimpleResource) have 'exists' kwarg for __init__.
         if Resource in bases and SimpleResource not in bases:
-            init = attrs.get('__init__')
+            init = attrs.get("__init__")
             if init:
                 import inspect
+
                 sig = inspect.signature(init)
-                if 'exists' not in sig.parameters:
+                if "exists" not in sig.parameters:
                     raise TypeError(f"Class {name}.__init__ must be defined with 'exists' kwarg.")
 
         return super().__new__(mcs, name, bases, attrs)
+
 
 class Resource(metaclass=ResourceMeta):
     def apply(self):
@@ -179,16 +190,17 @@ class Resource(metaclass=ResourceMeta):
             self.destroy()
 
     def before_apply(self):
-        '''Used to gather state that is needed in both create & destroy.'''
+        """Used to gather state that is needed in both create & destroy."""
         pass
 
     def create(self):
-        '''Create/enable/etc. the resource when exists=True.'''
+        """Create/enable/etc. the resource when exists=True."""
         raise NotImplementedError()
 
     def destroy(self):
-        '''Destroy/remove/disable/etc. the resource when exists=False.'''
+        """Destroy/remove/disable/etc. the resource when exists=False."""
         raise NotImplementedError()
+
 
 class SimpleResource(Resource):
     def apply(self):
@@ -197,7 +209,9 @@ class SimpleResource(Resource):
     def destroy(self):
         raise RuntimeError("SimpleResources cannot be destroyed.")
 
+
 ## resources ##################################################################
+
 
 class Directory(Resource):
     def __init__(self, path, exists=True):
@@ -413,6 +427,7 @@ class Command(SimpleResource):
             return
         shell(self.args)
 
+
 ## main #######################################################################
 
 
@@ -456,20 +471,17 @@ def ambix():
     steps = [
         # base
         AptPackage("net-tools"),
-
         # caddy install
         Download("https://github.com/caddyserver/caddy/releases/download/v2.9.1/caddy_2.9.1_linux_amd64.tar.gz", "/root/caddy.tgz"),
         Directory("/root/caddy-install"),
         Command("tar", "-zxvf", "/root/caddy.tgz", "-C", "/root/caddy-install/", provides="/root/caddy-install/caddy"),
         Directory("/opt/caddy/bin/"),
         Command("cp", "/root/caddy-install/caddy", "/opt/caddy/bin/", provides="/opt/caddy/bin/caddy"),
-
         # Caddyfile
         File("/opt/caddy/ambix.caddy", contents=CADDYFILE_AMBIX),
-
         # caddy user, group, and service
         Group("caddy", system=True),
-        User("caddy", group='caddy', groups=['caddy'], system=True, home="/opt/caddy/", shell="/usr/sbin/nologin"),
+        User("caddy", group="caddy", groups=["caddy"], system=True, home="/opt/caddy/", shell="/usr/sbin/nologin"),
         Command("setcap", "cap_net_bind_service=+ep", "/opt/caddy/bin/caddy"),
         File("/etc/systemd/system/caddy.service", contents=SYSTEMD_CADDY),
         Command("systemctl", "daemon-reload"),
@@ -477,6 +489,7 @@ def ambix():
     ]
     for step in steps:
         step.run()
+
 
 def wool_apply(task_name):
     tasks = {

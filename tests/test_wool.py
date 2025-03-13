@@ -16,6 +16,7 @@ from wool.wool import Resource, SimpleResource, Directory, File, User, Download,
 TEST_FILE_SRC = "Hello world from src!\n"
 TEST_FILE_CONTENTS = "Hello world from contents!\n"
 
+
 class TestWoolUtils(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -60,6 +61,7 @@ class TestWoolUtils(unittest.TestCase):
         assert file_needs_update(self.path1, self.path2) == False
         assert file_needs_update(self.path1, self.path3) == True
 
+
 class TestWoolResources(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -83,37 +85,40 @@ class TestWoolResources(unittest.TestCase):
 
     def test_metaclass_exists_required_by_init(self):
         with self.assertRaises(TypeError) as context:
+
             class BadResource(Resource):
                 def __init__(self):
                     self.foo = 1
+
         assert "must be defined with 'exists' kwarg" in str(context.exception)
 
     def test_metaclass_resource(self):
         class GoodResource(Resource):
             def __init__(self, exists=True):
                 self.exists = exists
-                self.state = 'nothing'
+                self.state = "nothing"
 
             def create(self):
-                self.state = 'created'
+                self.state = "created"
 
             def destroy(self):
-                self.state = 'destroyed'
+                self.state = "destroyed"
 
         g = GoodResource()
         g.apply()
-        assert g.state == 'created'
+        assert g.state == "created"
 
     def test_metaclass_simple_resource(self):
         class GoodSimpleResource(SimpleResource):
             def __init__(self):
-                self.state = 'nothing'
+                self.state = "nothing"
 
             def apply(self):
-                self.state = 'applied'
+                self.state = "applied"
+
         g = GoodSimpleResource()
         g.apply()
-        assert g.state == 'applied'
+        assert g.state == "applied"
 
     def test_dir_create_and_destroy(self):
         dirname = self.root / "bah"
@@ -174,8 +179,8 @@ class TestWoolResources(unittest.TestCase):
             system=True,
             shell="/sbin/nologin",
             home=self.root / "home",
-            group='floppy',
-            groups=['cdrom'],
+            group="floppy",
+            groups=["cdrom"],
         )
         assert not u.is_present()
         u.apply()
