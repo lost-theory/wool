@@ -27,6 +27,7 @@ from wool.wool import (
     Command,
     Owner,
     Perms,
+    Symlink,
     shell,
     shell_output,
     checksum,
@@ -350,3 +351,53 @@ class TestWoolResources(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             p = Perms(self.root / "nonexistent-file", 0o644)
             p.apply()
+
+    def test_symlink(self):
+        # Create paths and source files
+        src_file = self.root / "symlink-src.txt"
+        src_file.write_text("Target file for symlink tests.")
+        src_wrong = self.root / "symlink-src-wrong.txt"
+        src_wrong.write_text("This is the wrong target.")
+        existing_file = self.root / "existing-file.txt"
+        existing_file.write_text("This is an existing file")
+        src_nonexistent = self.root / "this-src-file-does-not-exist.txt"
+        link_path = self.root / "symlink-test.txt"
+        nonexistent_link_path = self.root / "nonexistent-symlink.txt"
+
+        # Create a symlink to the target
+        s = Symlink(link_path, src_file)
+        s.apply()
+
+        # Verify the symlink was created and points to the correct target
+        assert link_path.is_symlink()
+        assert link_path.readlink() == src_file
+        assert link_path.read_bytes() == src_file.read_bytes()
+
+        # Test no-op when symlink already exists and points to correct target
+        with patch("builtins.print") as mock_print:
+            s.apply()
+            assert "Skipping symlink creation" in repr(mock_print.call_args_list)
+
+        # Manually point `link_path` to `src_wrong`
+        os.unlink(link_path)
+        os.symlink(src=src_wrong, dst=link_path)
+        assert link_path.is_symlink()
+        assert link_path.readlink() == src_wrong
+
+        # Recreate the symlink and verify it again points to src_file
+        s = Symlink(link_path, src_file)
+        s.apply()
+        assert link_path.is_symlink()
+        assert link_path.readlink() == src_file
+
+        # Test error when a file exists at the symlink path
+        s = Symlink(existing_file, src_file)
+        with self.assertRaises(RuntimeError) as context:
+            s.apply()
+        assert "already exists" in str(context.exception)
+
+        # Verify that symlinks can be created for target paths that don't exist
+        s = Symlink(nonexistent_link_path, src_nonexistent)
+        s.apply()
+        assert nonexistent_link_path.is_symlink()
+        assert nonexistent_link_path.readlink() == src_nonexistent

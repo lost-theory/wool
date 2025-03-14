@@ -484,6 +484,32 @@ class Perms(SimpleResource):
         print(f"Changed permissions of {self.path!r} to {oct(self.mode)}.")
 
 
+class Symlink(SimpleResource):
+    def __init__(self, path, src):
+        self.path = Path(path).expanduser()
+        self.src = Path(src).expanduser()
+
+    def apply(self):
+        if not self.src.exists():
+            print(f"Warning! Source {self.src!r} does not exist, but creating symlink anyway.")
+
+        if self.path.exists() and not self.path.is_symlink():
+            raise RuntimeError(f"Cannot create symlink at {self.path!r} because a file or directory already exists there.")
+
+        if self.path.is_symlink():
+            current_src = Path(os.readlink(self.path))
+            if current_src == self.src:
+                print(f"Skipping symlink creation for {self.path!r} because it already points to {self.src!r}.")
+                return
+            else:
+                print(f"Updating symlink {self.path!r} to point to {self.src!r} instead of {current_src!r}.")
+                self.path.unlink()
+
+        # Create the symlink
+        os.symlink(src=self.src, dst=self.path)
+        print(f"Created symlink from {self.path!r} to {self.src!r}.")
+
+
 ## main #######################################################################
 
 
