@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import grp
 import pwd
+import stat
 from string import Template
 from pathlib import Path
 
@@ -154,7 +155,7 @@ def apt_pkg_is_installed(name):
     elif status != 0 and "no packages found matching" in err:
         return False
     else:
-        raise RuntimeError(f"Unable to parse dkpg-query result: {output!r}.")
+        raise RuntimeError(f"Unable to parse dkpg-query result: {[status, out, err]}.")
 
 
 ## resource base classes ######################################################
@@ -418,6 +419,69 @@ class Command(SimpleResource):
             print(f"Skipping command because {self.provides} already exists.")
             return
         shell(self.args)
+
+
+class Owner(SimpleResource):
+    def __init__(self, path, user=None, group=None):
+        self.path = Path(path).expanduser()
+        self.user = user
+        self.group = group
+
+        if not self.user and not self.group:
+            raise ValueError("At least one of `user` or `group` must be specified.")
+
+    def apply(self):
+        if not self.path.exists():
+            raise RuntimeError(f"Cannot change ownership of {self.path!r} because it doesn't exist.")
+
+        # Get current ownership
+        stat_info = self.path.stat()
+        current_uid, current_gid = stat_info.st_uid, stat_info.st_gid
+        uid, gid = current_uid, current_gid
+
+        if self.user:
+            try:
+                uid = pwd.getpwnam(self.user).pw_uid
+            except KeyError:
+                raise ValueError(f"User {self.user!r} does not exist.")
+
+        if self.group:
+            try:
+                gid = grp.getgrnam(self.group).gr_gid
+            except KeyError:
+                raise ValueError(f"Group {self.group!r} does not exist.")
+
+        # Check if change is needed
+        if uid == current_uid and gid == current_gid:
+            print(f"Skipping ownership change for {self.path!r} because it already has the correct ownership.")
+            return
+
+        # Change ownership
+        shell(["sudo", "chown", f"{uid}:{gid}", self.path])
+
+
+class Perms(SimpleResource):
+    def __init__(self, path, mode):
+        self.path = Path(path).expanduser()
+        if isinstance(mode, str):
+            mode = int("0o" + mode, 8)
+        self.mode = mode
+
+    def apply(self):
+        if not self.path.exists():
+            raise RuntimeError(f"Cannot change permissions of {self.path!r} because it doesn't exist.")
+
+        # Get current permissions
+        current_mode = stat.S_IMODE(self.path.stat().st_mode)
+
+        # Check if change is needed
+        if current_mode == self.mode:
+            print(f"Skipping permission change for {self.path!r} because it already has mode {oct(self.mode)}.")
+            return
+
+        # Change permissions
+        self.path.chmod(self.mode)
+        print(f"Changed permissions of {self.path!r} to {oct(self.mode)}.")
 
 
 ## main #######################################################################

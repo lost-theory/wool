@@ -1,7 +1,10 @@
 #!/usr/bin/env python
 
+import grp
 import os
+import pwd
 import random
+import stat
 import string
 import subprocess
 import sys
@@ -9,9 +12,28 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
-from wool.wool import Resource, SimpleResource, Directory, File, User, Group, Download, AptPackage, Virtualenv, Command, shell, shell_output, checksum, checksum_bytes, file_needs_update
+from wool.wool import (
+    Resource,
+    SimpleResource,
+    Directory,
+    File,
+    User,
+    Group,
+    Download,
+    AptPackage,
+    Virtualenv,
+    Command,
+    Owner,
+    Perms,
+    shell,
+    shell_output,
+    checksum,
+    checksum_bytes,
+    file_needs_update,
+)
+from wool.wool import Path as WoolPath
 
 TEST_FILE_SRC = "Hello world from src!\n"
 TEST_FILE_CONTENTS = "Hello world from contents!\n"
@@ -255,3 +277,76 @@ class TestWoolResources(unittest.TestCase):
         with open(dest) as f:
             contents_on_disk = f.read()
         assert contents + "\n" == contents_on_disk
+
+    def test_ownership(self):
+        # Create a test file
+        test_file = self.root / "ownership-test.txt"
+        test_file.write_text("Test file for ownership")
+
+        current_user = pwd.getpwuid(os.getuid()).pw_name
+        current_group = grp.getgrgid(os.getgid()).gr_name
+
+        # Test with both user and group
+        with patch("wool.wool.shell") as mock_shell:
+            o = Owner(test_file, user=current_user, group=current_group)
+            o.apply()
+            assert not mock_shell.called, "ownership is already correct, shell call should have been skipped"
+
+        # Test with different user/group
+        with patch("wool.wool.shell") as mock_shell:
+            o = Owner(test_file, user="root", group="root")
+            o.apply()
+            mock_shell.assert_called_once()
+            assert mock_shell.call_args.args[0] == ["sudo", "chown", "0:0", test_file]
+
+        # Test with only user
+        with patch("wool.wool.shell") as mock_shell:
+            o = Owner(test_file, user="root")
+            o.apply()
+            mock_shell.assert_called_once()
+
+        # Test with only group
+        with patch("wool.wool.shell") as mock_shell:
+            o = Owner(test_file, group="root")
+            o.apply()
+            mock_shell.assert_called_once()
+
+        # Verify exception raised when file doesn't exist
+        with patch("wool.wool.shell") as mock_shell:
+            with self.assertRaises(RuntimeError):
+                o = Owner(self.root / "nonexistent-file.txt", user=current_user)
+                o.apply()
+
+        # Test with invalid arguments
+        with self.assertRaises(ValueError):
+            Owner(test_file).apply()
+        with self.assertRaises(ValueError):
+            Owner(test_file, user="baduser12345").apply()
+        with self.assertRaises(ValueError):
+            Owner(test_file, group="badgroup12345").apply()
+
+    def test_permissions(self):
+        test_file = self.root / "permissions-test.txt"
+        test_file.write_text("Test file for permissions.")
+
+        # set initial perms
+        initial_mode = 0o644
+        test_file.chmod(initial_mode)
+
+        # no-op for same perms
+        with patch.object(WoolPath, "chmod", new=MagicMock()) as mock_chmod:
+            p = Perms(test_file, initial_mode)
+            p.apply()
+            assert not mock_chmod.called
+            assert stat.S_IMODE(test_file.stat().st_mode) == initial_mode
+
+        # change perms
+        new_mode = 0o600
+        p = Perms(test_file, new_mode)
+        p.apply()
+        assert stat.S_IMODE(test_file.stat().st_mode) == new_mode
+
+        # verify exception raised when file doesn't exist
+        with self.assertRaises(RuntimeError):
+            p = Perms(self.root / "nonexistent-file", 0o644)
+            p.apply()
