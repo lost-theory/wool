@@ -401,3 +401,17 @@ class TestWoolResources(unittest.TestCase):
         s.apply()
         assert nonexistent_link_path.is_symlink()
         assert nonexistent_link_path.readlink() == src_nonexistent
+
+        # Test destroying a symlink
+        destroy_link_path = self.root / "symlink-to-destroy.txt"
+        os.symlink(src=src_file, dst=destroy_link_path)
+        assert destroy_link_path.is_symlink()
+
+        s = Symlink(destroy_link_path, src_file, exists=False)
+        s.apply()
+        assert not destroy_link_path.exists()
+
+        # Test no-op when trying to destroy a non-existent symlink
+        with patch("builtins.print") as mock_print:
+            s.apply()  # Try to destroy again
+            assert "Skipping removal of symlink" in repr(mock_print.call_args_list)
