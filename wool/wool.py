@@ -84,38 +84,46 @@ class ResourceMeta(type):
         if name == "Resource" or name == "SimpleResource":
             return super().__new__(mcs, name, bases, attrs)
 
-        # Check that subclasses of Resource (but not SimpleResource) have 'exists' kwarg for __init__.
+        # Check that subclasses of Resource (but not SimpleResource) have 'ensures' kwarg for __init__.
         if Resource in bases and SimpleResource not in bases:
             init = attrs.get("__init__")
             if init:
                 import inspect
 
                 sig = inspect.signature(init)
-                if "exists" not in sig.parameters:
-                    raise TypeError(f"Class {name}.__init__ must be defined with 'exists' kwarg.")
+                if "ensures" not in sig.parameters:
+                    raise TypeError(f"Class {name}.__init__ must be defined with 'ensures' kwarg.")
 
         return super().__new__(mcs, name, bases, attrs)
 
 
 class Resource(metaclass=ResourceMeta):
+    ENSURES_VALUES = ["present", "absent"]
+
     def apply(self):
-        if self.exists:
+        """Apply the resource based on its ensures value."""
+        if self.ensures == "present":
             self.create()
-        else:
+        elif self.ensures == "absent":
             self.destroy()
+        else:
+            raise ValueError(f"Unsupported value for `ensures`: {self.ensures!r}. Valid values are: {self.VALID_ENSURES!r}")
 
     def create(self):
-        """Create/enable/etc. the resource when exists=True."""
+        """Create/enable/etc. the resource when ensures='present'."""
         raise NotImplementedError()
 
     def destroy(self):
-        """Destroy/remove/disable/etc. the resource when exists=False."""
+        """Destroy/remove/disable/etc. the resource when ensures='absent'."""
         raise NotImplementedError()
 
 
 class SimpleResource(Resource):
     def apply(self):
         raise NotImplementedError()
+
+    def create(self):
+        raise RuntimeError("SimpleResources cannot be created.")
 
     def destroy(self):
         raise RuntimeError("SimpleResources cannot be destroyed.")
@@ -125,9 +133,9 @@ class SimpleResource(Resource):
 
 
 class Directory(Resource):
-    def __init__(self, path, exists=True):
+    def __init__(self, path, ensures="present"):
         self.path = Path(path).expanduser()
-        self.exists = exists
+        self.ensures = ensures
 
     def create(self):
         if self.path.is_dir():
@@ -143,20 +151,14 @@ class Directory(Resource):
 
 
 class File(Resource):
-    def __init__(self, path, src=None, contents=None, exists=True):
+    def __init__(self, path, src=None, contents=None, ensures="present"):
         if not src and not contents:
             contents = ""
 
         self.path = Path(path).expanduser()
         self.src = Path(src).expanduser() if src else None
         self.contents = contents
-        self.exists = exists
-
-    def apply(self):
-        if self.exists:
-            self.create()
-        else:
-            self.destroy()
+        self.ensures = ensures
 
     def create(self):
         if self.src:
@@ -183,16 +185,16 @@ class File(Resource):
 
 
 class User(Resource):
-    def __init__(self, username, group=None, groups=None, shell=None, home=None, system=False, exists=True):
+    def __init__(self, username, group=None, groups=None, shell=None, home=None, system=False, ensures="present"):
         self.username = username
         self.primary_group = group
         self.wanted_groups = groups or []
         self.shell = shell
         self.home = home
         self.system = system
-        self.exists = exists
+        self.ensures = ensures
 
-    def is_present(self):
+    def exists(self):
         try:
             u = pwd.getpwnam(self.username)
             return True
@@ -204,7 +206,7 @@ class User(Resource):
         return set(g.gr_name for g in grp.getgrall() if self.username in g.gr_mem)
 
     def create(self):
-        if self.is_present():
+        if self.exists():
             print(f"Skipping user creation for {self.username!r} because user already exists.")
         else:
             cmd = ["sudo", "useradd"]
@@ -232,19 +234,19 @@ class User(Resource):
                 shell(["sudo", "gpasswd", "-d", self.username, group])
 
     def destroy(self):
-        if self.is_present():
+        if self.exists():
             shell(["sudo", "userdel", "-r", self.username])
         else:
             print(f"Skipping user deletion for {self.username!r} because user doesn't exist.")
 
 
 class Group(Resource):
-    def __init__(self, groupname, system=False, exists=True):
+    def __init__(self, groupname, system=False, ensures="present"):
         self.groupname = groupname
         self.system = system
-        self.exists = exists
+        self.ensures = ensures
 
-    def is_present(self):
+    def exists(self):
         try:
             g = grp.getgrnam(self.groupname)
             return True
@@ -252,7 +254,7 @@ class Group(Resource):
             return False
 
     def create(self):
-        if self.is_present():
+        if self.exists():
             print(f"Skipping group creation for {self.groupname!r} because group already exists.")
             return
         cmd = ["sudo", "groupadd"]
@@ -262,7 +264,7 @@ class Group(Resource):
         shell(cmd)
 
     def destroy(self):
-        if self.is_present():
+        if self.exists():
             shell(["sudo", "groupdel", self.groupname])
         else:
             print(f"Skipping group deletion for {self.groupname!r} because group doesn't exist.")
@@ -281,10 +283,10 @@ class Download(SimpleResource):
 
 
 class AptPackage(Resource):
-    def __init__(self, name, provides=None, exists=True):
+    def __init__(self, name, provides=None, ensures="present"):
         self.name = name
         self.provides = Path(provides).expanduser() if provides else None
-        self.exists = exists
+        self.ensures = ensures
 
     def is_installed(self):
         return apt_pkg_is_installed(self.name)
@@ -319,9 +321,6 @@ class Virtualenv(SimpleResource):
             print(f"Skipping venv creation of {self.path} because it already exists.")
             return
         shell([self.python_bin, "-mvenv", self.path])
-
-    # TODO: make a method for this?
-    # run([pip_path, "install", "-r", os.path.join(repo_path, "requirements.txt")])
 
 
 class Command(SimpleResource):
@@ -400,10 +399,10 @@ class Perms(SimpleResource):
 
 
 class Symlink(Resource):
-    def __init__(self, path, src, exists=True):
+    def __init__(self, path, src, ensures="present"):
         self.path = Path(path).expanduser()
         self.src = Path(src).expanduser()
-        self.exists = exists
+        self.ensures = ensures
 
     def create(self):
         if not self.src.exists():
@@ -434,42 +433,6 @@ class Symlink(Resource):
 
 
 ## main #######################################################################
-
-
-def demo(task_dir=None):
-    steps = [
-        AptPackage("nginx", provides="/usr/sbin/nginx"),
-        AptPackage("nginx", exists=False),
-        AptPackage("nginx", exists=False),
-        AptPackage("nginx"),
-        Directory("/tmp/foo/bar"),
-        Directory("/tmp/foo/bar", exists=False),
-        Directory("/tmp/foo/bar", exists=False),
-        Directory("/tmp/foo/bar"),
-        Download("http://lost-theory.org/robots.txt", provides="/tmp/foo/bar/robots.txt"),
-        Virtualenv("/usr/bin/python3", "~/testing-env"),
-        Command("/bin/bash", "-c", "date | tee -a /tmp/foo/out.log"),
-        User("app"),
-        User("app", exists=False),
-        Directory("/tmp/app-home/"),
-        User("app", groups=["foo"], shell="/bin/bash", home="/tmp/app-home/"),
-    ]
-    for step in steps:
-        step.apply()
-
-
-def ltorg_stage_1(task_dir=None):
-    steps = [
-        AptPackage("mercurial", provides="/usr/bin/hg"),
-        AptPackage("python3.12-venv"),
-        User("app"),
-        Directory("/tmp/foo/bar"),
-        Download("http://lost-theory.org/robots.txt", provides="/tmp/foo/bar/robots.txt"),
-        Virtualenv("/usr/bin/python3", "~/testing-env"),
-        Command("/bin/bash", "-c", "date | tee -a /tmp/foo/out.log"),
-    ]
-    for step in steps:
-        step.apply()
 
 
 def wool_apply(task_name, tasks):
@@ -513,11 +476,3 @@ def wool_main(tasks):
         wool_apply(args.task, tasks)
     else:
         parser.print_help()
-
-
-if __name__ == "__main__":
-    tasks = {
-        "demo": demo,
-        "ltorg_stage_1": ltorg_stage_1,
-    }
-    wool_main(tasks)

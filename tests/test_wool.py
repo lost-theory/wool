@@ -111,19 +111,19 @@ class TestWoolResources(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmpdir.cleanup()
 
-    def test_metaclass_exists_required_by_init(self):
+    def test_metaclass_ensures_required_by_init(self):
         with self.assertRaises(TypeError) as context:
 
             class BadResource(Resource):
                 def __init__(self):
                     self.foo = 1
 
-        assert "must be defined with 'exists' kwarg" in str(context.exception)
+        assert "must be defined with 'ensures' kwarg" in str(context.exception)
 
     def test_metaclass_for_resource(self):
         class GoodResource(Resource):
-            def __init__(self, exists=True):
-                self.exists = exists
+            def __init__(self, ensures="present"):
+                self.ensures = ensures
                 self.state = "nothing"
 
             def create(self):
@@ -135,6 +135,10 @@ class TestWoolResources(unittest.TestCase):
         g = GoodResource()
         g.apply()
         assert g.state == "created"
+
+        g = GoodResource(ensures="absent")
+        g.apply()
+        assert g.state == "destroyed"
 
     def test_metaclass_for_simple_resource(self):
         class GoodSimpleResource(SimpleResource):
@@ -154,12 +158,12 @@ class TestWoolResources(unittest.TestCase):
         assert not d.path.is_dir()
         d.apply()
         assert d.path.is_dir()
-        d = Directory(dirname, exists=False)
+        d = Directory(dirname, ensures="absent")
         d.apply()
         assert not d.path.is_dir()
 
     def test_existing_dir_destroy(self):
-        d = Directory(self.existing_dir_for_destroy, exists=False)
+        d = Directory(self.existing_dir_for_destroy, ensures="absent")
         assert d.path.is_dir()
         d.apply()
         assert not d.path.is_dir()
@@ -173,7 +177,7 @@ class TestWoolResources(unittest.TestCase):
         with open(f.path) as test_file:
             contents_on_disk = test_file.read()
         assert contents_on_disk == TEST_FILE_CONTENTS
-        f = File(destpath, exists=False)
+        f = File(destpath, ensures="absent")
         assert f.path.is_file()
         f.apply()
         assert not f.path.is_file()
@@ -187,13 +191,13 @@ class TestWoolResources(unittest.TestCase):
         with open(f.path) as test_file:
             contents_on_disk = test_file.read()
         assert contents_on_disk == TEST_FILE_SRC
-        f = File(destpath, exists=False)
+        f = File(destpath, ensures="absent")
         assert f.path.is_file()
         f.apply()
         assert not f.path.is_file()
 
     def test_existing_file_destroy(self):
-        f = File(self.existing_file_for_destroy, exists=False)
+        f = File(self.existing_file_for_destroy, ensures="absent")
         assert f.path.is_file()
         f.apply()
         assert not f.path.is_file()
@@ -208,24 +212,24 @@ class TestWoolResources(unittest.TestCase):
             group="floppy",
             groups=["cdrom"],
         )
-        assert not u.is_present()
+        assert not u.exists()
         u.apply()
-        assert u.is_present()
-        u = User(name, exists=False)
-        assert u.is_present()
+        assert u.exists()
+        u = User(name, ensures="absent")
+        assert u.exists()
         u.apply()
-        assert not u.is_present()
+        assert not u.exists()
 
     def test_group_create_destroy(self):
         name = f"tgrp-{self.timestamp}-{uniq()}"
         g = Group(name, system=True)
-        assert not g.is_present()
+        assert not g.exists()
         g.apply()
-        assert g.is_present()
-        g = Group(name, exists=False)
-        assert g.is_present()
+        assert g.exists()
+        g = Group(name, ensures="absent")
+        assert g.exists()
         g.apply()
-        assert not g.is_present()
+        assert not g.exists()
 
     @patch("wool.wool.apt_pkg_is_installed")
     @patch("wool.wool.apt_pkg_install")
@@ -245,7 +249,7 @@ class TestWoolResources(unittest.TestCase):
     @patch("wool.wool.apt_pkg_remove")
     def test_apt_pkg_destroy(self, f_remove, f_install, f_installed):
         f_installed.return_value = True
-        p = AptPackage("boo-pkg", exists=False)
+        p = AptPackage("boo-pkg", ensures="absent")
         assert p.is_installed()
         assert f_installed.called
         p.apply()
@@ -407,7 +411,7 @@ class TestWoolResources(unittest.TestCase):
         os.symlink(src=src_file, dst=destroy_link_path)
         assert destroy_link_path.is_symlink()
 
-        s = Symlink(destroy_link_path, src_file, exists=False)
+        s = Symlink(destroy_link_path, src_file, ensures="absent")
         s.apply()
         assert not destroy_link_path.exists()
 
