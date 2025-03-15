@@ -10,97 +10,8 @@ import subprocess
 import grp
 import pwd
 import stat
-from string import Template
+from textwrap import dedent
 from pathlib import Path
-
-# XXX: some code I once used for writing Nginx configs using a `Template`, with "idempotency check"
-"""
-ips = check_output(["hostname", "--all-ip-addresses"]).strip()
-with open("/tmp/app.conf", "w") as f:
-    f.write(Template(NGINX_CONFIG).substitute(
-        ips=ips
-    ))
-if file_needs_update(src="/tmp/app.conf", dst="/etc/nginx/conf.d/app.conf"):
-    run(["sudo", "mv", "/tmp/app.conf", "/etc/nginx/conf.d/app.conf"])
-    run(["sudo", "service", "nginx", "reload"])
-"""
-
-## caddy ######################################################################
-
-CADDYFILE_AMBIX = """
-{
-    auto_https off
-    http_port 80
-    https_port 443
-}
-:8080 {
-    reverse_proxy https://ce.ocmca.org {
-        header_up Host ce.ocmca.org
-        transport http {
-            tls
-            tls_insecure_skip_verify
-        }
-    }
-}
-"""
-
-## start systemd code #########################################################
-
-# XXX: currently unused
-SERVICE_CONFIG = """
-[Unit]
-Description=${service_description}
-After=network.target
-
-[Service]
-User=${user}
-WorkingDirectory=${repo_path}
-Type=simple
-Environment=${env}
-ExecStart=${gunicorn_path} --error-logfile=- --access-logfile=- --log-syslog --bind=unix:/tmp/gunicorn.sock --workers=4 app:app
-KillMode=mixed
-
-[Install]
-WantedBy=multi-user.target
-"""
-
-SYSTEMD_CADDY = """
-[Unit]
-Description=Caddy
-After=network.target
-
-[Service]
-User=caddy
-Group=caddy
-WorkingDirectory=/opt/caddy/
-ExecStart=/opt/caddy/bin/caddy run --environ --config /opt/caddy/ambix.caddy --adapter caddyfile
-ExecReload=/opt/caddy/bin/caddy reload --config /opt/caddy/ambix.caddy --adapter caddyfile
-LimitNOFILE=1048576
-LimitNPROC=512
-Restart=on-failure
-PrivateTmp=true
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-
-[Install]
-WantedBy=multi-user.target
-"""
-
-# gunicorn systemd service config
-"""
-gunicorn_service_src = "/tmp/gunicorn.service"
-gunicorn_service_dst = "/etc/systemd/system/multi-user.target.wants/gunicorn.service"
-with open(gunicorn_service_src, "w") as f:
-    f.write(Template(SERVICE_CONFIG).substitute(
-        user=os.environ['USER'],
-        secret_key_path=os.path.join(os.environ['HOME'], '.moviepicker-secret'),
-        gunicorn_path=os.path.join(venv_path, "bin/gunicorn"),
-        repo_path=repo_path,
-    ))
-if file_needs_update(src=gunicorn_service_src, dst=gunicorn_service_dst):
-    run(["sudo", "mv", gunicorn_service_src, gunicorn_service_dst])
-    run(["sudo", "systemctl", "daemon-reload"])
-    run(["sudo", "service", "gunicorn", "restart"])
-"""
 
 ## utils ######################################################################
 
@@ -136,6 +47,10 @@ def file_needs_update(src, dst):
     if checksum(src) != checksum(dst):
         return True
     return False
+
+
+def make_remote_task_dir(task_name):
+    return Path(f"/tmp/wool-task-{task_name}/")
 
 
 def apt_pkg_install(name):
@@ -248,7 +163,7 @@ class File(Resource):
             if file_needs_update(self.src, self.path):
                 shutil.copy(self.src, self.path)
             else:
-                print(f"Skipped copying of {self.src!r} to {self.path!r} because files match.")
+                print(f"Skipping copy of {self.src!r} to {self.path!r} because files match.")
         else:
             is_bytes = isinstance(self.contents, bytes)
             needs_update = True
@@ -258,7 +173,7 @@ class File(Resource):
                 with open(self.path, "wb" if is_bytes else "w") as f:
                     f.write(self.contents)
             else:
-                print(f"Skipped writing of {self.path!r} because checksum matches contents.")
+                print(f"Skipping writing of {self.path!r} because checksum matches contents.")
 
     def destroy(self):
         if self.path.is_file():
@@ -521,7 +436,7 @@ class Symlink(Resource):
 ## main #######################################################################
 
 
-def demo():
+def demo(task_dir=None):
     steps = [
         AptPackage("nginx", provides="/usr/sbin/nginx"),
         AptPackage("nginx", exists=False),
@@ -540,10 +455,10 @@ def demo():
         User("app", groups=["foo"], shell="/bin/bash", home="/tmp/app-home/"),
     ]
     for step in steps:
-        step.run()
+        step.apply()
 
 
-def ltorg_stage_1():
+def ltorg_stage_1(task_dir=None):
     steps = [
         AptPackage("mercurial", provides="/usr/bin/hg"),
         AptPackage("python3.12-venv"),
@@ -554,41 +469,15 @@ def ltorg_stage_1():
         Command("/bin/bash", "-c", "date | tee -a /tmp/foo/out.log"),
     ]
     for step in steps:
-        step.run()
+        step.apply()
 
 
-def ambix():
-    steps = [
-        # base
-        AptPackage("net-tools"),
-        # caddy install
-        Download("https://github.com/caddyserver/caddy/releases/download/v2.9.1/caddy_2.9.1_linux_amd64.tar.gz", "/root/caddy.tgz"),
-        Directory("/root/caddy-install"),
-        Command("tar", "-zxvf", "/root/caddy.tgz", "-C", "/root/caddy-install/", provides="/root/caddy-install/caddy"),
-        Directory("/opt/caddy/bin/"),
-        Command("cp", "/root/caddy-install/caddy", "/opt/caddy/bin/", provides="/opt/caddy/bin/caddy"),
-        # Caddyfile
-        File("/opt/caddy/ambix.caddy", contents=CADDYFILE_AMBIX),
-        # caddy user, group, and service
-        Group("caddy", system=True),
-        User("caddy", group="caddy", groups=["caddy"], system=True, home="/opt/caddy/", shell="/usr/sbin/nologin"),
-        Command("setcap", "cap_net_bind_service=+ep", "/opt/caddy/bin/caddy"),
-        File("/etc/systemd/system/caddy.service", contents=SYSTEMD_CADDY),
-        Command("systemctl", "daemon-reload"),
-        Command("systemctl", "enable", "--now", "caddy"),
-    ]
-    for step in steps:
-        step.run()
-
-
-def wool_apply(task_name):
-    tasks = {
-        "demo": demo,
-        "ltorg_stage_1": ltorg_stage_1,
-        "ambix": ambix,
-    }
+def wool_apply(task_name, tasks):
     task_func = tasks[task_name]
-    return task_func()
+    task_dir = make_remote_task_dir(task_name)
+    if not task_dir.is_dir():
+        task_dir = None
+    return task_func(task_dir)
 
 
 def wool_push(remote, task_name):
@@ -596,12 +485,18 @@ def wool_push(remote, task_name):
     (_, output, _) = shell_output(["ssh", "-A", remote, "python3 -c 'import platform; print(tuple(map(int, platform.python_version_tuple())) >= (3, 6, 0))'"])
     assert output.strip() == "True", "Invalid remote python version. Need >=3.6.0."
 
+    # Rsync up task directory if it exists
+    task_dir = Path(".") / task_name
+    remote_task_dir = make_remote_task_dir(task_name)
+    if task_dir.is_dir():
+        shell(["rsync", "-pthrvz", "--delete", f"{task_dir}/", f"{remote}:{remote_task_dir}"])
+
     # Push and run
     shell(["scp", __file__, "{}:/tmp/wool_push.py".format(remote)])
     shell(["ssh", "-A", remote, f"python3 -u /tmp/wool_push.py --apply --task={task_name}"])
 
 
-def main():
+def wool_main(tasks):
     parser = argparse.ArgumentParser(description="Simple pure python config management")
     parser.add_argument("--push", type=str, metavar="USER@HOST", help="Push and apply on remote user@host via SSH.")
     parser.add_argument("--apply", action="store_true", help="Used internally by --push. Or you can run it yourself on a local machine.")
@@ -615,10 +510,14 @@ def main():
     if args.push and args.task:
         wool_push(args.push, args.task)
     elif args.apply and args.task:
-        wool_apply(args.task)
+        wool_apply(args.task, tasks)
     else:
         parser.print_help()
 
 
 if __name__ == "__main__":
-    main()
+    tasks = {
+        "demo": demo,
+        "ltorg_stage_1": ltorg_stage_1,
+    }
+    wool_main(tasks)
