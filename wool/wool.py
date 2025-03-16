@@ -13,6 +13,8 @@ import stat
 from textwrap import dedent
 from pathlib import Path
 
+PROJECT = Path(f"/tmp/wool-run/")
+
 ## utils ######################################################################
 
 
@@ -47,10 +49,6 @@ def file_needs_update(src, dst):
     if checksum(src) != checksum(dst):
         return True
     return False
-
-
-def make_remote_task_dir(task_name):
-    return Path(f"/tmp/wool-task-{task_name}/")
 
 
 def apt_pkg_install(name):
@@ -437,30 +435,30 @@ class Symlink(Resource):
 
 def wool_apply(task_name, tasks):
     task_func = tasks[task_name]
-    task_dir = make_remote_task_dir(task_name)
-    if not task_dir.is_dir():
-        task_dir = None
-    return task_func(task_dir)
+    return task_func()
 
 
-def wool_push(remote, task_name):
+def wool_push(calling_script, remote, task_name, local_project=None):
     # Remote python version check
     (_, output, _) = shell_output(["ssh", "-A", remote, "python3 -c 'import platform; print(tuple(map(int, platform.python_version_tuple())) >= (3, 6, 0))'"])
     assert output.strip() == "True", "Invalid remote python version. Need >=3.6.0."
 
-    # Rsync up task directory if it exists
-    task_dir = Path(".") / task_name
-    remote_task_dir = make_remote_task_dir(task_name)
-    if task_dir.is_dir():
-        shell(["rsync", "-pthrvz", "--delete", f"{task_dir}/", f"{remote}:{remote_task_dir}"])
+    # Rsync up local project directory if specified
+    shell(["ssh", remote, f"mkdir -p {PROJECT}"])
+    if local_project:
+        local_project = Path(local_project).resolve()
+        shell(["rsync", "-pthrvz", "--delete", f"{local_project}/", f"{remote}:{PROJECT}"])
 
     # Push and run
-    shell(["scp", __file__, "{}:/tmp/wool_push.py".format(remote)])
-    shell(["ssh", "-A", remote, f"python3 -u /tmp/wool_push.py --apply --task={task_name}"])
+    calling_script = Path(calling_script)
+    shell(["scp", __file__, f"{remote}:{PROJECT}/wool.py"])
+    shell(["scp", calling_script, f"{remote}:{PROJECT}/{calling_script.name}"])
+    shell(["ssh", "-A", remote, f"python3 -u {PROJECT}/{calling_script.name} --apply --task={task_name}"])
 
 
-def wool_main(tasks):
+def wool_main(calling_script, tasks):
     parser = argparse.ArgumentParser(description="Simple pure python config management")
+    parser.add_argument("--project", type=str, metavar="PATH", help="(Optional) Path of your wool project which will be rsync-ed to the host.")
     parser.add_argument("--push", type=str, metavar="USER@HOST", help="Push and apply on remote user@host via SSH.")
     parser.add_argument("--apply", action="store_true", help="Used internally by --push. Or you can run it yourself on a local machine.")
     parser.add_argument("--task", type=str, metavar="NAME", help="The name of the task to apply.")
@@ -471,8 +469,13 @@ def wool_main(tasks):
         assert args.task.isidentifier(), f"Invalid task name: {args.task!r}"
 
     if args.push and args.task:
-        wool_push(args.push, args.task)
+        wool_push(calling_script, args.push, args.task, args.project)
     elif args.apply and args.task:
         wool_apply(args.task, tasks)
     else:
         parser.print_help()
+
+
+if __name__ == "__main__":
+    print("Wool is a library, not a framework or script. You need to import wool_main from your own code.")
+    sys.exit(1)
