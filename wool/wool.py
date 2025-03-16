@@ -447,9 +447,17 @@ def wool_push(calling_script, remote, task_name, local_project=None):
     shell(["ssh", remote, f"mkdir -p {PROJECT}"])
     if local_project:
         local_project = Path(local_project).resolve()
-        shell(["rsync", "-pthrvz", "--delete", f"{local_project}/", f"{remote}:{PROJECT}"])
+        # Rsync flags:
+        # -pt preserve file permissions and mtimes
+        # -h display human readable file sizes
+        # -r recursive
+        # -v verbose
+        # -z compression
+        # -L follow symlinks and copy their contents
+        # --delete remove files on remote that don't exist locally
+        shell(["rsync", "-pthrvzL", "--delete", f"{local_project}/", f"{remote}:{PROJECT}"])
 
-    # Push and run
+    # Copy calling script and wool.py to remote host and execute
     calling_script = Path(calling_script)
     shell(["scp", __file__, f"{remote}:{PROJECT}/wool.py"])
     shell(["scp", calling_script, f"{remote}:{PROJECT}/{calling_script.name}"])
