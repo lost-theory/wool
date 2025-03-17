@@ -3,20 +3,35 @@ Wool: Pure Python Configuration Management.
 """
 
 import argparse
+import grp
 import hashlib
 import os
-import shutil
-import subprocess
-import grp
 import pwd
+import shutil
 import stat
+import subprocess
+import sys
 from textwrap import dedent
 from pathlib import Path
 
 PROJECT = Path(f"/tmp/wool-run/")
 
-## utils ######################################################################
+STAT_MODE_MASKS = [
+    stat.S_IRUSR,
+    stat.S_IWUSR,
+    stat.S_IXUSR,
+    stat.S_IRGRP,
+    stat.S_IWGRP,
+    stat.S_IXGRP,
+    stat.S_IROTH,
+    stat.S_IWOTH,
+    stat.S_IXOTH,
+    stat.S_ISUID,
+    stat.S_ISGID, 
+    stat.S_ISVTX, 
+]
 
+## utils ######################################################################
 
 def shell(cmd, **kw):
     """Runs `cmd`, raising an error if it fails."""
@@ -70,6 +85,32 @@ def apt_pkg_is_installed(name):
     else:
         raise RuntimeError(f"Unable to parse dkpg-query result: {[status, out, err]}.")
 
+class SymbolicPermissions:
+    def __init__(self, mode):
+        parts = [bool(mode & mask) for mask in STAT_MODE_MASKS]
+        self.user_parts = parts[0:3]
+        self.group_parts = parts[3:6]
+        self.other_parts = parts[6:9]
+        self.special_bits = parts[9:12]
+        self.ur, self.uw, self.ux = self.user_parts
+        self.gr, self.gw, self.gx = self.group_parts
+        self.otr, self.otw, self.otx = self.other_parts
+        self.setuid, self.setgid, self.sticky = self.special_bits
+        
+    def __str__(self):
+        rwx_parts = self.user_parts + self.group_parts + self.other_parts
+        ur, uw, ux, gr, gw, gx, otr, otw, otx = [
+            symbol if is_set else '-' for (symbol, is_set) in zip('rwxrwxrwx', rwx_parts)
+        ]
+        setuid = "u+s" if self.setuid else "u-s"
+        setgid = "g+s" if self.setgid else "g-s"
+        sticky = "o+t" if self.setuid else "o-t"
+        return f"u={ur}{uw}{ux}, g={gr}{gw}{gx}, o={otr}{otw}{otx}, {setuid}, {setgid}, {sticky}"
+
+    def __eq__(self, other):
+        if isinstance(other, str):
+            return str(self) == other
+        return self == other
 
 ## resource base classes ######################################################
 
@@ -334,10 +375,11 @@ class Command(SimpleResource):
 
 
 class Owner(SimpleResource):
-    def __init__(self, path, user=None, group=None):
+    def __init__(self, path, user=None, group=None, recursive=False):
         self.path = Path(path).expanduser()
         self.user = user
         self.group = group
+        self.recursive = recursive
 
         if not self.user and not self.group:
             raise ValueError("At least one of `user` or `group` must be specified.")
@@ -352,48 +394,61 @@ class Owner(SimpleResource):
         uid, gid = current_uid, current_gid
 
         if self.user:
-            try:
-                uid = pwd.getpwnam(self.user).pw_uid
-            except KeyError:
-                raise ValueError(f"User {self.user!r} does not exist.")
+            uid = pwd.getpwnam(self.user).pw_uid
 
         if self.group:
-            try:
-                gid = grp.getgrnam(self.group).gr_gid
-            except KeyError:
-                raise ValueError(f"Group {self.group!r} does not exist.")
+            gid = grp.getgrnam(self.group).gr_gid
 
-        # Check if change is needed
-        if uid == current_uid and gid == current_gid:
-            print(f"Skipping ownership change for {self.path!r} because it already has the correct ownership.")
-            return
+        recursive_flag = []
+        if self.recursive:
+            recursive_flag = ["-R"] 
+        else:
+            # only do current owner/group check for single file ownership change
+            if uid == current_uid and gid == current_gid:
+                print(f"Skipping ownership change for {self.path!r} because it already has the correct ownership.")
+                return
 
-        # Change ownership
-        shell(["sudo", "chown", f"{uid}:{gid}", self.path])
+        shell(["sudo", "chown"] + recursive_flag + [f"{uid}:{gid}", self.path])
 
 
 class Perms(SimpleResource):
-    def __init__(self, path, mode):
+    def __init__(self, path, mode, recursive=False):
         self.path = Path(path).expanduser()
         if isinstance(mode, str):
             mode = int("0o" + mode, 8)
         self.mode = mode
+        self.recursive = recursive
+
+    def get_full_mode(self):
+        return self.path.stat().st_mode
+
+    def get_full_mode_str(self):
+        return oct(self.get_full_mode())[2:]
+
+    def get_mode(self):
+        return stat.S_IMODE(self.get_full_mode())
+
+    def get_mode_str(self):
+        return oct(self.get_full_mode())[-3:]
+
+    def get_symbolic(self):
+        mode = self.get_full_mode()
+        return SymbolicPermissions(mode)
+
 
     def apply(self):
         if not self.path.exists():
             raise RuntimeError(f"Cannot change permissions of {self.path!r} because it doesn't exist.")
 
-        # Get current permissions
-        current_mode = stat.S_IMODE(self.path.stat().st_mode)
-
-        # Check if change is needed
-        if current_mode == self.mode:
-            print(f"Skipping permission change for {self.path!r} because it already has mode {oct(self.mode)}.")
-            return
-
-        # Change permissions
-        self.path.chmod(self.mode)
-        print(f"Changed permissions of {self.path!r} to {oct(self.mode)}.")
+        if self.recursive:
+            shell(["chmod", "-R", oct(self.mode)[2:], self.path])
+        else:
+            current_mode = stat.S_IMODE(self.path.stat().st_mode)
+            if current_mode == self.mode and not self.recursive:
+                print(f"Skipping permission change for {self.path!r} because it already has mode {oct(self.mode)}.")
+                return
+            else:
+                self.path.chmod(self.mode)
 
 
 class Symlink(Resource):

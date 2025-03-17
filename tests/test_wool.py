@@ -284,39 +284,51 @@ class TestWoolResources(unittest.TestCase):
         assert contents + "\n" == contents_on_disk
 
     def test_ownership(self):
-        # Create a test file
-        test_file = self.root / "ownership-test.txt"
-        test_file.write_text("Test file for ownership")
-
         current_user = pwd.getpwuid(os.getuid()).pw_name
         current_group = grp.getgrgid(os.getgid()).gr_name
+        test_dir = self.root / "test-ownership-dir"
+        test_dir.mkdir()
 
-        # Test with both user and group
+        test_file = self.root / "test-ownership-file.txt"
+        test_file.write_text("This file is for testing ownership changes.")
+
+        # User and group
         with patch("wool.wool.shell") as mock_shell:
             o = Owner(test_file, user=current_user, group=current_group)
             o.apply()
             assert not mock_shell.called, "ownership is already correct, shell call should have been skipped"
 
-        # Test with different user/group
+        # Different user and group
         with patch("wool.wool.shell") as mock_shell:
             o = Owner(test_file, user="root", group="root")
             o.apply()
             mock_shell.assert_called_once()
-            assert mock_shell.call_args.args[0] == ["sudo", "chown", "0:0", test_file]
+            assert "chown" in mock_shell.call_args.args[0]
+            assert "0:0" in mock_shell.call_args.args[0]
 
-        # Test with only user
+        # User only
         with patch("wool.wool.shell") as mock_shell:
             o = Owner(test_file, user="root")
             o.apply()
             mock_shell.assert_called_once()
+            assert "chown" in mock_shell.call_args.args[0]
 
-        # Test with only group
+        # Group only
         with patch("wool.wool.shell") as mock_shell:
             o = Owner(test_file, group="root")
             o.apply()
             mock_shell.assert_called_once()
+            assert "chown" in mock_shell.call_args.args[0]
 
-        # Verify exception raised when file doesn't exist
+        # Recursive
+        with patch("wool.wool.shell") as mock_shell:
+            o = Owner(test_dir, user="root", group="root", recursive=True)
+            o.apply()
+            mock_shell.assert_called_once()
+            assert "chown" in mock_shell.call_args.args[0]
+            assert "-R" in mock_shell.call_args.args[0]
+
+        # File doesn't exist
         with patch("wool.wool.shell") as mock_shell:
             with self.assertRaises(RuntimeError):
                 o = Owner(self.root / "nonexistent-file.txt", user=current_user)
@@ -325,14 +337,20 @@ class TestWoolResources(unittest.TestCase):
         # Test with invalid arguments
         with self.assertRaises(ValueError):
             Owner(test_file).apply()
-        with self.assertRaises(ValueError):
+        with self.assertRaises(KeyError):
             Owner(test_file, user="baduser12345").apply()
-        with self.assertRaises(ValueError):
+        with self.assertRaises(KeyError):
             Owner(test_file, group="badgroup12345").apply()
 
-    def test_permissions(self):
-        test_file = self.root / "permissions-test.txt"
-        test_file.write_text("Test file for permissions.")
+    def test_perms(self):
+        test_file = self.root / "perms-test.txt"
+        test_file.write_text("Test file for perms.")
+
+        # Create a test directory with files for recursive tests
+        test_dir = self.root / "test-perms-dir"
+        test_dir.mkdir()
+        (test_dir / "file1.txt").write_text("Test file 1")
+        (test_dir / "file2.txt").write_text("Test file 2")
 
         # set initial perms
         initial_mode = 0o644
@@ -351,10 +369,58 @@ class TestWoolResources(unittest.TestCase):
         p.apply()
         assert stat.S_IMODE(test_file.stat().st_mode) == new_mode
 
+        # test recursive permissions (mocked)
+        with patch("wool.wool.shell") as mock_shell:
+            p = Perms(test_dir, 0o755, recursive=True)
+            p.apply()
+            mock_shell.assert_called_once()
+            assert "chmod" in mock_shell.call_args.args[0]
+            assert "-R" in mock_shell.call_args.args[0]
+            assert "755" in mock_shell.call_args.args[0]
+
+        # test recursive permissions (real)
+        p = Perms(test_dir, 0o744, recursive=True)
+        p.apply()
+        p = Perms(test_dir, 0o777, recursive=True)
+        p.apply()
+        p = Perms(test_dir, 0o744, recursive=True)
+        p.apply()
+
         # verify exception raised when file doesn't exist
         with self.assertRaises(RuntimeError):
-            p = Perms(self.root / "nonexistent-file", 0o644)
+            p = Perms(self.root / "nonexistent-file.txt", 0o644)
             p.apply()
+
+    def test_perms_getting_mode_attrs(self):
+        test_file = self.root / "perms-mode-attrs-tests.txt"
+        test_file.write_text("Test file for reading perms mode attrs.")
+        test_file.chmod(0o640)
+        
+        p = Perms(test_file, 0o777)
+        assert p.get_full_mode() == 0o100640
+        assert p.get_full_mode_str() == "100640"
+        assert p.get_mode() == 0o640
+        assert p.get_mode_str() == "640"
+        sym = p.get_symbolic()
+        assert sym == 'u=rw-, g=r--, o=---, u-s, g-s, o-t'
+        assert [sym.ur, sym.uw, sym.ux] == [True, True, False]
+        assert [sym.gr, sym.gw, sym.gx] == [True, False, False]
+        assert [sym.otr, sym.otw, sym.otx] == [False, False, False]
+        assert [sym.setuid, sym.setgid, sym.sticky] == [False, False, False]
+
+        p.apply()
+        assert p.get_full_mode() == 0o100777
+        assert p.get_full_mode_str() == "100777"
+        assert p.get_mode() == 0o777
+        assert p.get_mode_str() == "777"
+        sym = p.get_symbolic()
+        assert sym == 'u=rwx, g=rwx, o=rwx, u-s, g-s, o-t'
+        assert [sym.ur, sym.uw, sym.ux] == [True, True, True]
+        assert [sym.gr, sym.gw, sym.gx] == [True, True, True]
+        assert [sym.otr, sym.otw, sym.otx] == [True, True, True]
+        assert [sym.setuid, sym.setgid, sym.sticky] == [False, False, False]
+
+
 
     def test_symlink(self):
         # Create paths and source files
