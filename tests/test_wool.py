@@ -1,10 +1,11 @@
-#!/usr/bin/env python
+"""
+Test suite for wool.
+"""
 
 import grp
 import os
 import pwd
 import random
-import stat
 import string
 import subprocess
 import sys
@@ -41,25 +42,25 @@ TEST_FILE_SRC = "Hello world from src!\n"
 TEST_FILE_CONTENTS = "Hello world from contents!\n"
 
 
-def uniq():
+def uniq() -> str:
     return "".join(random.sample(string.ascii_lowercase, 14))
 
 
 class WoolTestCase(unittest.TestCase):
     @classmethod
-    def setUpClass(cls):
+    def setUpClass(cls) -> None:
         cls.tmpdir = tempfile.TemporaryDirectory()
         cls.root = Path(cls.tmpdir.name)
         cls.timestamp = datetime.now().strftime("%Y%m%d")
 
     @classmethod
-    def tearDownClass(cls):
+    def tearDownClass(cls) -> None:
         cls.tmpdir.cleanup()
 
 
 class TestWoolUtils(WoolTestCase):
     @classmethod
-    def setUpClass(cls):
+    def setUpClass(cls) -> None:
         super().setUpClass()
         cls.path1 = cls.root / "file1.txt"
         cls.path2 = cls.root / "file2.txt"
@@ -92,45 +93,52 @@ class TestWoolUtils(WoolTestCase):
         assert checksum(self.path1) == checksum_bytes(TEST_FILE_SRC.encode())
 
     def test_file_needs_update(self):
-        assert file_needs_update(self.path1, self.root / "this-doesnt-exist") == True
-        assert file_needs_update(self.path1, self.path2) == False
-        assert file_needs_update(self.path1, self.path3) == True
+        assert file_needs_update(self.path1, self.root / "this-doesnt-exist")
+        assert not file_needs_update(self.path1, self.path2)
+        assert file_needs_update(self.path1, self.path3)
 
 
 class TestWoolResources(WoolTestCase):
     @classmethod
-    def setUpClass(cls):
+    def setUpClass(cls) -> None:
         super().setUpClass()
         cls.existing_dir_for_destroy = cls.root / "foo"
-        os.mkdir(cls.existing_dir_for_destroy)
+        cls.existing_dir_for_destroy.mkdir()
 
         cls.existing_file_for_src = cls.root / "baz.txt"
-        with open(cls.existing_file_for_src, "w") as f:
-            f.write(TEST_FILE_SRC)
+        cls.existing_file_for_src.write_text(TEST_FILE_SRC)
 
         cls.existing_file_for_destroy = cls.root / "bar.txt"
-        with open(cls.existing_file_for_destroy, "w") as f:
-            f.write("This will be deleted very soon... It's not read anywhere.")
+        cls.existing_file_for_destroy.write_text("This will be deleted very soon... It's not read anywhere.")
 
     def test_metaclass_ensures_required_by_init(self):
         with self.assertRaises(TypeError) as context:
 
             class BadResource(Resource):
-                def __init__(self):
-                    self.foo = 1
+                def __init__(self) -> None:
+                    self.name = uniq()
+                    self.state = "init"
+
+                def create(self) -> None:
+                    self.state = "created"
+
+                def destroy(self) -> None:
+                    self.state = "destroyed"
+
+            b = BadResource()
 
         assert "must be defined with 'ensures' kwarg" in str(context.exception)
 
     def test_metaclass_for_resource(self):
         class GoodResource(Resource):
-            def __init__(self, ensures="present"):
+            def __init__(self, ensures: str = "present") -> None:
                 self.ensures = ensures
-                self.state = "nothing"
+                self.state = "init"
 
-            def create(self):
+            def create(self) -> None:
                 self.state = "created"
 
-            def destroy(self):
+            def destroy(self) -> None:
                 self.state = "destroyed"
 
         g = GoodResource()
@@ -143,10 +151,10 @@ class TestWoolResources(WoolTestCase):
 
     def test_metaclass_for_simple_resource(self):
         class GoodSimpleResource(SimpleResource):
-            def __init__(self):
+            def __init__(self) -> None:
                 self.state = "nothing"
 
-            def apply(self):
+            def apply(self) -> None:
                 self.state = "applied"
 
         g = GoodSimpleResource()
@@ -176,8 +184,7 @@ class TestWoolResources(WoolTestCase):
         assert not f.path.is_file()
         f.apply()
         assert f.path.is_file()
-        with open(f.path) as test_file:
-            contents_on_disk = test_file.read()
+        contents_on_disk = f.path.read_text("utf8")
         assert contents_on_disk == TEST_FILE_CONTENTS
         f = File(destpath, ensures="absent")
         assert f.path.is_file()
@@ -190,8 +197,7 @@ class TestWoolResources(WoolTestCase):
         assert not f.path.is_file()
         f.apply()
         assert f.path.is_file()
-        with open(f.path) as test_file:
-            contents_on_disk = test_file.read()
+        contents_on_disk = f.path.read_text("utf8")
         assert contents_on_disk == TEST_FILE_SRC
         f = File(destpath, ensures="absent")
         assert f.path.is_file()
@@ -277,13 +283,21 @@ class TestWoolResources(WoolTestCase):
     def test_command(self):
         dest = self.root / "test-command-output.txt"
         contents = "hey whats up"
-        c = Command("/bin/bash", "-c", f'echo "{contents}" | tee -a {dest}')
+        c = Command(["/bin/bash", "-c", f'echo "{contents}" | tee -a {dest}'])
         assert not dest.is_file()
         c.apply()
         assert dest.is_file()
-        with open(dest) as f:
-            contents_on_disk = f.read()
+        contents_on_disk = dest.read_text("utf8")
         assert contents + "\n" == contents_on_disk
+
+    def test_command_skip_when_provides_exists(self):
+        dest = self.root / "test-command-output-skip.txt"
+        dest.write_text("This file exists already.")
+        with patch("wool.wool.shell") as mock_shell:
+            c = Command(["/bin/bash", "-c", f'echo "hey whats up" | tee -a {dest}'], provides=dest)
+            assert dest.is_file()
+            c.apply()
+            assert not mock_shell.called, "shell call should have been skipped because provides file already exists"
 
 
 class TestWoolOwner(WoolTestCase):
@@ -334,10 +348,9 @@ class TestWoolOwner(WoolTestCase):
             assert "-R" in mock_shell.call_args.args[0]
 
     def test_nonexistent_file(self):
-        with patch("wool.wool.shell") as mock_shell:
-            with self.assertRaises(RuntimeError):
-                o = Owner(self.root / "nonexistent-file.txt", user=self.current_user)
-                o.apply()
+        with self.assertRaises(RuntimeError):
+            o = Owner(self.root / "nonexistent-file.txt", user=self.current_user)
+            o.apply()
 
     def test_invalid_arguments(self):
         with self.assertRaises(ValueError):
@@ -374,11 +387,11 @@ class TestWoolPerms(WoolTestCase):
         assert s != SymbolicPermissions(0o755) and SymbolicPermissions(0o755) != s
 
     def test_no_change_when_perms_match(self):
-        self.test_file_for_no_change = self.root / "perms-test-no-change.txt"
-        self.test_file_for_no_change.write_text("Test file for perms (no change).")
-        self.test_file_for_no_change.chmod(0o644)
+        test_file_for_no_change = self.root / "perms-test-no-change.txt"
+        test_file_for_no_change.write_text("Test file for perms (no change).")
+        test_file_for_no_change.chmod(0o644)
         with patch.object(WoolPath, "chmod", new=MagicMock()) as mock_chmod:
-            p = Perms(self.test_file_for_no_change, 0o644)
+            p = Perms(test_file_for_no_change, 0o644)
             p.apply()
             assert not mock_chmod.called
             assert p.get_mode() == 0o644
@@ -424,7 +437,7 @@ class TestWoolPerms(WoolTestCase):
         assert sym == "u=rw-, g=r--, o=---, u-s, g-s, o-t"
         assert [sym.ur, sym.uw, sym.ux] == [True, True, False]
         assert [sym.gr, sym.gw, sym.gx] == [True, False, False]
-        assert [sym.otr, sym.otw, sym.otx] == [False, False, False]
+        assert [sym.othr, sym.othw, sym.othx] == [False, False, False]
         assert [sym.setuid, sym.setgid, sym.sticky] == [False, False, False]
 
         p.apply()
@@ -436,7 +449,7 @@ class TestWoolPerms(WoolTestCase):
         assert sym == "u=rwx, g=rwx, o=rwx, u-s, g-s, o-t"
         assert [sym.ur, sym.uw, sym.ux] == [True, True, True]
         assert [sym.gr, sym.gw, sym.gx] == [True, True, True]
-        assert [sym.otr, sym.otw, sym.otx] == [True, True, True]
+        assert [sym.othr, sym.othw, sym.othx] == [True, True, True]
         assert [sym.setuid, sym.setgid, sym.sticky] == [False, False, False]
 
 

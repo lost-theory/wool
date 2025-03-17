@@ -17,9 +17,7 @@ classifiers = [
 
 ]
 license = {text = "GNU General Public License v3"}
-dependencies = [
-  
-]
+dependencies = []
 
 [project.optional-dependencies]
 dev = []
@@ -40,9 +38,9 @@ package-dir = {"" = "wool"}
 line-length = 200
 preview = 1
 
-
-# Mypy
-# ----
+[tool.pylint]
+max-line-length = 200
+disable = ["missing-function-docstring", "missing-class-docstring"]
 
 [tool.mypy]
 files = "."

@@ -5,16 +5,21 @@ Wool: Pure Python Configuration Management.
 import argparse
 import grp
 import hashlib
+import inspect
 import os
 import pwd
 import shutil
 import stat
 import subprocess
 import sys
-from textwrap import dedent
 from pathlib import Path
 
-PROJECT = Path(f"/tmp/wool-run/")
+from collections.abc import Callable
+from typing import Union, Mapping, Any, Optional, Sequence
+
+StrOrPath = Union[str, Path]
+
+PROJECT = Path("/tmp/wool-run/")
 
 STAT_MODE_MASKS = [
     stat.S_IRUSR,
@@ -34,32 +39,32 @@ STAT_MODE_MASKS = [
 ## utils ######################################################################
 
 
-def shell(cmd, **kw):
+def shell(cmd: Sequence[StrOrPath], **kw: Any) -> None:
     """Runs `cmd`, raising an error if it fails."""
-    print("Running: {} with {}".format(cmd, kw))
+    print(f"Running: {cmd} with {kw}")
     subprocess.check_call(cmd, **kw)
 
 
-def shell_output(cmd, **kw):
+def shell_output(cmd: Sequence[StrOrPath], **kw: Any) -> tuple[int, str, str]:
     """
     Runs `cmd`, returning (returncode, stdout, stderr). Does not raise an error
     on command failure.
     """
-    print("Getting output from: {} with {}".format(cmd, kw))
-    result = subprocess.run(cmd, **kw, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    print(f"Getting output from: {cmd} with {kw}")
+    result = subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kw)
     return (result.returncode, result.stdout, result.stderr)
 
 
-def checksum(path):
-    checksum, _ = subprocess.check_output(["sha256sum", path], text=True).strip().split()
-    return checksum
+def checksum(path: StrOrPath) -> str:
+    result, _ = subprocess.check_output(["sha256sum", path], text=True).strip().split()
+    return result
 
 
-def checksum_bytes(b):
+def checksum_bytes(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
-def file_needs_update(src, dst):
+def file_needs_update(src: StrOrPath, dst: StrOrPath) -> bool:
     if not os.path.exists(dst):
         return True
     if checksum(src) != checksum(dst):
@@ -67,28 +72,30 @@ def file_needs_update(src, dst):
     return False
 
 
-def apt_pkg_install(name):
+def apt_pkg_install(name: str) -> None:
     shell(["sudo", "apt-get", "install", "-y", name])
 
 
-def apt_pkg_remove(name):
+def apt_pkg_remove(name: str) -> None:
     shell(["sudo", "apt-get", "remove", "-y", name])
 
 
-def apt_pkg_is_installed(name):
+def apt_pkg_is_installed(name: str) -> bool:
     (status, out, err) = shell_output(["dpkg-query", "-W", "-f='${Status}'", name])
+    result = False
     if "ok installed" in out:
-        return True
+        result = True
     elif "ok not-installed" in out:
-        return False
+        result = False
     elif status != 0 and "no packages found matching" in err:
-        return False
+        result = False
     else:
         raise RuntimeError(f"Unable to parse dkpg-query result: {[status, out, err]}.")
+    return result
 
 
 class SymbolicPermissions:
-    def __init__(self, mode):
+    def __init__(self, mode: int) -> None:
         parts = [bool(mode & mask) for mask in STAT_MODE_MASKS]
         self.mode = mode
         self.user_parts = parts[0:3]
@@ -97,23 +104,23 @@ class SymbolicPermissions:
         self.special_bits = parts[9:12]
         self.ur, self.uw, self.ux = self.user_parts
         self.gr, self.gw, self.gx = self.group_parts
-        self.otr, self.otw, self.otx = self.other_parts
+        self.othr, self.othw, self.othx = self.other_parts
         self.setuid, self.setgid, self.sticky = self.special_bits
 
-    def __str__(self):
+    def __str__(self) -> str:
         rwx_parts = self.user_parts + self.group_parts + self.other_parts
-        ur, uw, ux, gr, gw, gx, otr, otw, otx = [symbol if is_set else "-" for (symbol, is_set) in zip("rwxrwxrwx", rwx_parts)]
+        ur, uw, ux, gr, gw, gx, othr, othw, othx = [symbol if is_set else "-" for (symbol, is_set) in zip("rwxrwxrwx", rwx_parts)]
         setuid = "u+s" if self.setuid else "u-s"
         setgid = "g+s" if self.setgid else "g-s"
-        sticky = "o+t" if self.setuid else "o-t"
-        return f"u={ur}{uw}{ux}, g={gr}{gw}{gx}, o={otr}{otw}{otx}, {setuid}, {setgid}, {sticky}"
+        sticky = "o+t" if self.sticky else "o-t"
+        return f"u={ur}{uw}{ux}, g={gr}{gw}{gx}, o={othr}{othw}{othx}, {setuid}, {setgid}, {sticky}"
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         if isinstance(other, SymbolicPermissions):
             return self.mode == other.mode
         return str(self) == str(other)
 
-    def __ne__(self, other):
+    def __ne__(self, other: Any) -> bool:
         return not self == other
 
 
@@ -123,17 +130,15 @@ class SymbolicPermissions:
 class ResourceMeta(type):
     """Metaclass to validate Resource subclasses."""
 
-    def __new__(mcs, name, bases, attrs):
+    def __new__(mcs, name: str, bases: tuple[type, ...], attrs: dict[str, Any]) -> type:
         # Skip validation for the baseclasses.
-        if name == "Resource" or name == "SimpleResource":
+        if name in ("Resource", "SimpleResource"):
             return super().__new__(mcs, name, bases, attrs)
 
         # Check that subclasses of Resource (but not SimpleResource) have 'ensures' kwarg for __init__.
         if Resource in bases and SimpleResource not in bases:
             init = attrs.get("__init__")
             if init:
-                import inspect
-
                 sig = inspect.signature(init)
                 if "ensures" not in sig.parameters:
                     raise TypeError(f"Class {name}.__init__ must be defined with 'ensures' kwarg.")
@@ -144,32 +149,35 @@ class ResourceMeta(type):
 class Resource(metaclass=ResourceMeta):
     ENSURES_VALUES = ["present", "absent"]
 
-    def apply(self):
+    def apply(self) -> None:
         """Apply the resource based on its ensures value."""
+        if not hasattr(self, "ensures"):
+            raise AttributeError("Resource subclass must have 'ensures' attribute.")
+
         if self.ensures == "present":
             self.create()
         elif self.ensures == "absent":
             self.destroy()
         else:
-            raise ValueError(f"Unsupported value for `ensures`: {self.ensures!r}. Valid values are: {self.VALID_ENSURES!r}")
+            raise ValueError(f"Unsupported value for `ensures`: {self.ensures!r}. Valid values are: {self.ENSURES_VALUES!r}")
 
-    def create(self):
+    def create(self) -> None:
         """Create/enable/etc. the resource when ensures='present'."""
         raise NotImplementedError()
 
-    def destroy(self):
+    def destroy(self) -> None:
         """Destroy/remove/disable/etc. the resource when ensures='absent'."""
         raise NotImplementedError()
 
 
 class SimpleResource(Resource):
-    def apply(self):
+    def apply(self) -> None:
         raise NotImplementedError()
 
-    def create(self):
+    def create(self) -> None:
         raise RuntimeError("SimpleResources cannot be created.")
 
-    def destroy(self):
+    def destroy(self) -> None:
         raise RuntimeError("SimpleResources cannot be destroyed.")
 
 
@@ -177,17 +185,17 @@ class SimpleResource(Resource):
 
 
 class Directory(Resource):
-    def __init__(self, path, ensures="present"):
+    def __init__(self, path: StrOrPath, ensures: str = "present") -> None:
         self.path = Path(path).expanduser()
         self.ensures = ensures
 
-    def create(self):
+    def create(self) -> None:
         if self.path.is_dir():
             print(f"Skipping directory creation of {self.path} because it already exists.")
         else:
             shell(["mkdir", "-p", self.path])
 
-    def destroy(self):
+    def destroy(self) -> None:
         if not self.path.is_dir():
             print(f"Skipping directory removal of {self.path} because it doesn't exist.")
         else:
@@ -195,7 +203,7 @@ class Directory(Resource):
 
 
 class File(Resource):
-    def __init__(self, path, src=None, contents=None, ensures="present"):
+    def __init__(self, path: StrOrPath, src: Optional[StrOrPath] = None, contents: Optional[str | bytes] = None, ensures: str = "present") -> None:
         if not src and not contents:
             contents = ""
 
@@ -204,24 +212,29 @@ class File(Resource):
         self.contents = contents
         self.ensures = ensures
 
-    def create(self):
+    def create(self) -> None:
         if self.src:
             if file_needs_update(self.src, self.path):
                 shutil.copy(self.src, self.path)
             else:
                 print(f"Skipping copy of {self.src!r} to {self.path!r} because files match.")
-        else:
-            is_bytes = isinstance(self.contents, bytes)
+        elif self.contents:
+            if isinstance(self.contents, bytes):
+                new_contents = self.contents
+            else:
+                new_contents = self.contents.encode()
             needs_update = True
             if self.path.exists():
-                needs_update = checksum(self.path) != checksum_bytes(self.contents if is_bytes else self.contents.encode())
+                needs_update = checksum(self.path) != checksum_bytes(new_contents)
             if needs_update:
-                with open(self.path, "wb" if is_bytes else "w") as f:
-                    f.write(self.contents)
+                with open(self.path, "wb") as f:
+                    f.write(new_contents)
             else:
-                print(f"Skipping writing of {self.path!r} because checksum matches contents.")
+                print(f"Skipping file write to {self.path!r} because checksum matches contents.")
+        else:
+            raise ValueError("At least one of `src` or `contents` must be specified.")
 
-    def destroy(self):
+    def destroy(self) -> None:
         if self.path.is_file():
             os.unlink(self.path)
         else:
@@ -229,7 +242,16 @@ class File(Resource):
 
 
 class User(Resource):
-    def __init__(self, username, group=None, groups=None, shell=None, home=None, system=False, ensures="present"):
+    def __init__(
+        self,
+        username: str,
+        group: Optional[str] = None,
+        groups: Optional[list[str]] = None,
+        shell: Optional[StrOrPath] = None,
+        home: Optional[StrOrPath] = None,
+        system: bool = False,
+        ensures: str = "present",
+    ):
         self.username = username
         self.primary_group = group
         self.wanted_groups = groups or []
@@ -238,18 +260,18 @@ class User(Resource):
         self.system = system
         self.ensures = ensures
 
-    def exists(self):
+    def exists(self) -> bool:
         try:
-            u = pwd.getpwnam(self.username)
+            pwd.getpwnam(self.username)
             return True
         except KeyError:
             return False
 
-    def get_current_groups(self):
+    def get_current_groups(self) -> set[str]:
         """Get list of groups user belongs to."""
         return set(g.gr_name for g in grp.getgrall() if self.username in g.gr_mem)
 
-    def create(self):
+    def create(self) -> None:
         if self.exists():
             print(f"Skipping user creation for {self.username!r} because user already exists.")
         else:
@@ -257,9 +279,9 @@ class User(Resource):
             if self.system:
                 cmd.append("--system")
             if self.shell:
-                cmd.extend(["--shell", self.shell])
+                cmd.extend(["--shell", str(self.shell)])
             if self.home:
-                cmd.extend(["--home-dir", self.home])
+                cmd.extend(["--home-dir", str(self.home)])
             if self.primary_group:
                 cmd.extend(["-g", self.primary_group])
             if self.wanted_groups:
@@ -277,7 +299,7 @@ class User(Resource):
             for group in groups_to_remove:
                 shell(["sudo", "gpasswd", "-d", self.username, group])
 
-    def destroy(self):
+    def destroy(self) -> None:
         if self.exists():
             shell(["sudo", "userdel", "-r", self.username])
         else:
@@ -285,19 +307,19 @@ class User(Resource):
 
 
 class Group(Resource):
-    def __init__(self, groupname, system=False, ensures="present"):
+    def __init__(self, groupname: str, system: bool = False, ensures: str = "present") -> None:
         self.groupname = groupname
         self.system = system
         self.ensures = ensures
 
-    def exists(self):
+    def exists(self) -> bool:
         try:
-            g = grp.getgrnam(self.groupname)
+            grp.getgrnam(self.groupname)
             return True
         except KeyError:
             return False
 
-    def create(self):
+    def create(self) -> None:
         if self.exists():
             print(f"Skipping group creation for {self.groupname!r} because group already exists.")
             return
@@ -307,7 +329,7 @@ class Group(Resource):
         cmd.append(self.groupname)
         shell(cmd)
 
-    def destroy(self):
+    def destroy(self) -> None:
         if self.exists():
             shell(["sudo", "groupdel", self.groupname])
         else:
@@ -315,11 +337,11 @@ class Group(Resource):
 
 
 class Download(SimpleResource):
-    def __init__(self, url, provides):
+    def __init__(self, url: str, provides: StrOrPath):
         self.url = url
         self.provides = Path(provides).expanduser()
 
-    def apply(self):
+    def apply(self) -> None:
         if self.provides.is_file():
             print(f"Skipping download {self.url} because {self.provides} exists.")
             return
@@ -327,15 +349,15 @@ class Download(SimpleResource):
 
 
 class AptPackage(Resource):
-    def __init__(self, name, provides=None, ensures="present"):
+    def __init__(self, name: str, provides: Optional[StrOrPath] = None, ensures: str = "present") -> None:
         self.name = name
         self.provides = Path(provides).expanduser() if provides else None
         self.ensures = ensures
 
-    def is_installed(self):
+    def is_installed(self) -> bool:
         return apt_pkg_is_installed(self.name)
 
-    def create(self):
+    def create(self) -> None:
         needs_install = False
         if self.provides and not self.provides.is_file():
             needs_install = True
@@ -347,7 +369,7 @@ class AptPackage(Resource):
         else:
             print(f"Skipping package install of {self.name} because it's already installed.")
 
-    def destroy(self):
+    def destroy(self) -> None:
         if self.is_installed():
             apt_pkg_remove(self.name)
         else:
@@ -355,12 +377,12 @@ class AptPackage(Resource):
 
 
 class Virtualenv(SimpleResource):
-    def __init__(self, python_bin, path):
+    def __init__(self, python_bin: StrOrPath, path: StrOrPath) -> None:
         self.python_bin = Path(python_bin).expanduser()
         self.path = Path(path).expanduser()
         self.pip_path = self.path / "bin/pip"
 
-    def apply(self):
+    def apply(self) -> None:
         if self.path.exists():
             print(f"Skipping venv creation of {self.path} because it already exists.")
             return
@@ -368,19 +390,19 @@ class Virtualenv(SimpleResource):
 
 
 class Command(SimpleResource):
-    def __init__(self, *args, provides=None):
-        self.args = list(args)
+    def __init__(self, cmd: list[StrOrPath], provides: Optional[StrOrPath] = None) -> None:
+        self.cmd = list(cmd)
         self.provides = Path(provides).expanduser() if provides else None
 
-    def apply(self):
+    def apply(self) -> None:
         if self.provides and self.provides.exists():
-            print(f"Skipping command because {self.provides} already exists.")
+            print(f"Skipping command {self.cmd} because {self.provides} already exists.")
             return
-        shell(self.args)
+        shell(self.cmd)
 
 
 class Owner(SimpleResource):
-    def __init__(self, path, user=None, group=None, recursive=False):
+    def __init__(self, path: StrOrPath, user: Optional[str] = None, group: Optional[str] = None, recursive: bool = False) -> None:
         self.path = Path(path).expanduser()
         self.user = user
         self.group = group
@@ -389,7 +411,7 @@ class Owner(SimpleResource):
         if not self.user and not self.group:
             raise ValueError("At least one of `user` or `group` must be specified.")
 
-    def apply(self):
+    def apply(self) -> None:
         if not self.path.exists():
             raise RuntimeError(f"Cannot change ownership of {self.path!r} because it doesn't exist.")
 
@@ -417,51 +439,50 @@ class Owner(SimpleResource):
 
 
 class Perms(SimpleResource):
-    def __init__(self, path, mode, recursive=False):
+    def __init__(self, path: StrOrPath, mode: Union[int, str], recursive: bool = False) -> None:
         self.path = Path(path).expanduser()
         if isinstance(mode, str):
             mode = int("0o" + mode, 8)
         self.mode = mode
         self.recursive = recursive
 
-    def get_full_mode(self):
+    def get_full_mode(self) -> int:
         return self.path.stat().st_mode
 
-    def get_full_mode_str(self):
+    def get_full_mode_str(self) -> str:
         return oct(self.get_full_mode())[2:]
 
-    def get_mode(self):
+    def get_mode(self) -> int:
         return stat.S_IMODE(self.get_full_mode())
 
-    def get_mode_str(self):
+    def get_mode_str(self) -> str:
         return oct(self.get_full_mode())[-3:]
 
-    def get_symbolic(self):
+    def get_symbolic(self) -> SymbolicPermissions:
         mode = self.get_full_mode()
         return SymbolicPermissions(mode)
 
-    def apply(self):
+    def apply(self) -> None:
         if not self.path.exists():
             raise RuntimeError(f"Cannot change permissions of {self.path!r} because it doesn't exist.")
 
         if self.recursive:
+            # always run chmod when in recursive mode
             shell(["chmod", "-R", oct(self.mode)[2:], self.path])
+        elif self.get_mode() != self.mode:
+            # run chmod when current mode doesn't match desired mode
+            self.path.chmod(self.mode)
         else:
-            current_mode = stat.S_IMODE(self.path.stat().st_mode)
-            if current_mode == self.mode and not self.recursive:
-                print(f"Skipping permission change for {self.path!r} because it already has mode {oct(self.mode)}.")
-                return
-            else:
-                self.path.chmod(self.mode)
+            print(f"Skipping permission change for {self.path!r} because it already has mode {oct(self.mode)}.")
 
 
 class Symlink(Resource):
-    def __init__(self, path, src, ensures="present"):
+    def __init__(self, path: StrOrPath, src: StrOrPath, ensures: str = "present") -> None:
         self.path = Path(path).expanduser()
         self.src = Path(src).expanduser()
         self.ensures = ensures
 
-    def create(self):
+    def create(self) -> None:
         if not self.src.exists():
             print(f"Warning! Source {self.src!r} does not exist, but creating symlink anyway.")
 
@@ -473,15 +494,14 @@ class Symlink(Resource):
             if current_src == self.src:
                 print(f"Skipping symlink creation for {self.path!r} because it already points to {self.src!r}.")
                 return
-            else:
-                print(f"Updating symlink {self.path!r} to point to {self.src!r} instead of {current_src!r}.")
-                self.path.unlink()
+            print(f"Updating symlink {self.path!r} to point to {self.src!r} instead of {current_src!r}.")
+            self.path.unlink()
 
         # Create the symlink
         os.symlink(src=self.src, dst=self.path)
         print(f"Created symlink from {self.path!r} to {self.src!r}.")
 
-    def destroy(self):
+    def destroy(self) -> None:
         if self.path.is_symlink():
             self.path.unlink()
             print(f"Removed symlink {self.path!r}.")
@@ -492,12 +512,12 @@ class Symlink(Resource):
 ## main #######################################################################
 
 
-def wool_apply(task_name, tasks):
+def wool_apply(task_name: str, tasks: Mapping[str, Callable[[], None]]) -> None:
     task_func = tasks[task_name]
     return task_func()
 
 
-def wool_push(calling_script, remote, task_name, local_project=None):
+def wool_push(calling_script: str, remote: str, task_name: str, local_project: Optional[str] = None) -> None:
     # Remote python version check
     (_, output, _) = shell_output(["ssh", "-A", remote, "python3 -c 'import platform; print(tuple(map(int, platform.python_version_tuple())) >= (3, 6, 0))'"])
     assert output.strip() == "True", "Invalid remote python version. Need >=3.6.0."
@@ -505,7 +525,7 @@ def wool_push(calling_script, remote, task_name, local_project=None):
     # Rsync up local project directory if specified
     shell(["ssh", remote, f"mkdir -p {PROJECT}"])
     if local_project:
-        local_project = Path(local_project).resolve()
+        local_project_path = Path(local_project).resolve()
         # Rsync flags:
         # -pt preserve file permissions and mtimes
         # -h display human readable file sizes
@@ -514,16 +534,16 @@ def wool_push(calling_script, remote, task_name, local_project=None):
         # -z compression
         # -L follow symlinks and copy their contents
         # --delete remove files on remote that don't exist locally
-        shell(["rsync", "-pthrvzL", "--delete", f"{local_project}/", f"{remote}:{PROJECT}"])
+        shell(["rsync", "-pthrvzL", "--delete", f"{local_project_path}/", f"{remote}:{PROJECT}"])
 
     # Copy calling script and wool.py to remote host and execute
-    calling_script = Path(calling_script)
+    calling_script_path = Path(calling_script)
     shell(["scp", __file__, f"{remote}:{PROJECT}/wool.py"])
-    shell(["scp", calling_script, f"{remote}:{PROJECT}/{calling_script.name}"])
-    shell(["ssh", "-A", remote, f"python3 -u {PROJECT}/{calling_script.name} --apply --task={task_name}"])
+    shell(["scp", calling_script_path, f"{remote}:{PROJECT}/{calling_script_path.name}"])
+    shell(["ssh", "-A", remote, f"python3 -u {PROJECT}/{calling_script_path.name} --apply --task={task_name}"])
 
 
-def wool_main(calling_script, tasks):
+def wool_main(calling_script: str, tasks: Mapping[str, Callable[[], None]]) -> None:
     parser = argparse.ArgumentParser(description="Simple pure python config management")
     parser.add_argument("--project", type=str, metavar="PATH", help="(Optional) Path of your wool project which will be rsync-ed to the host.")
     parser.add_argument("--push", type=str, metavar="USER@HOST", help="Push and apply on remote user@host via SSH.")
