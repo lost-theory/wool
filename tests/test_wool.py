@@ -46,7 +46,7 @@ def uniq() -> str:
     return "".join(random.sample(string.ascii_lowercase, 14))
 
 
-class WoolTestCase(unittest.TestCase):
+class WoolFileSystemTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.tmpdir = tempfile.TemporaryDirectory()  # pylint: disable=consider-using-with
@@ -58,59 +58,7 @@ class WoolTestCase(unittest.TestCase):
         cls.tmpdir.cleanup()
 
 
-class TestWoolUtils(WoolTestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        super().setUpClass()
-        cls.path1 = cls.root / "file1.txt"
-        cls.path2 = cls.root / "file2.txt"
-        cls.path3 = cls.root / "file3.txt"
-
-        cls.path1.write_text(TEST_FILE_SRC)
-        cls.path2.write_text(TEST_FILE_SRC)
-        cls.path3.write_text("")
-
-    def test_shell_success(self):
-        shell(["stat", self.path1])
-
-    def test_shell_failure(self):
-        with self.assertRaises(subprocess.CalledProcessError):
-            shell(["stat", self.root / "this-doesnt-exist"])
-
-    def test_shell_output_success(self):
-        (status, out, err) = shell_output(["stat", self.path1])
-        assert status == 0
-        assert "File:" in out
-        assert err == ""
-
-    def test_shell_output_failure(self):
-        (status, out, err) = shell_output(["stat", self.root / "this-doesnt-exist"])
-        assert status != 0
-        assert "File:" not in out
-        assert "cannot stat" in err
-
-    def test_checksum_path_vs_bytes(self):
-        assert checksum(self.path1) == checksum_bytes(TEST_FILE_SRC.encode())
-
-    def test_file_needs_update(self):
-        assert file_needs_update(self.path1, self.root / "this-doesnt-exist")
-        assert not file_needs_update(self.path1, self.path2)
-        assert file_needs_update(self.path1, self.path3)
-
-
-class TestWoolResources(WoolTestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        super().setUpClass()
-        cls.existing_dir_for_destroy = cls.root / "foo"
-        cls.existing_dir_for_destroy.mkdir()
-
-        cls.existing_file_for_src = cls.root / "baz.txt"
-        cls.existing_file_for_src.write_text(TEST_FILE_SRC)
-
-        cls.existing_file_for_destroy = cls.root / "bar.txt"
-        cls.existing_file_for_destroy.write_text("This will be deleted very soon... It's not read anywhere.")
-
+class TestWoolMetaclasses(unittest.TestCase):
     def test_metaclass_ensures_required_by_init(self):
         with self.assertRaises(TypeError) as context:
 
@@ -152,16 +100,120 @@ class TestWoolResources(WoolTestCase):
     def test_metaclass_for_simple_resource(self):
         class GoodSimpleResource(SimpleResource):
             def __init__(self) -> None:
-                self.state = "nothing"
+                self.state = "init"
 
             def apply(self) -> None:
                 self.state = "applied"
 
         g = GoodSimpleResource()
-        assert g.state == "nothing"
+        assert g.state == "init"
         g.apply()
         assert g.state == "applied"
 
+    def test_subclass_error_missing_ensures(self):
+        class ResourceMissingEnsures(Resource):
+            def __init__(self, ensures: str = "present"):
+                self.enshoors = ensures  # typo...
+                self.state = "init"
+
+            def create(self) -> None:
+                self.state = "created"
+
+            def destroy(self) -> None:
+                self.state = "destroyed"
+
+        with self.assertRaises(AttributeError) as context:
+            r = ResourceMissingEnsures()
+            r.apply()
+        assert "subclass must have 'ensures' attribute" in str(context.exception)
+
+    def test_subclass_missing_create_destroy(self):
+        class ResourceMissingCreateDestroy(Resource):  # pylint: disable=abstract-method
+            def __init__(self, ensures: str = "present"):
+                self.ensures = ensures
+                self.state = "init"
+
+        with self.assertRaises(NotImplementedError):
+            r = ResourceMissingCreateDestroy(ensures="present")
+            r.apply()
+        with self.assertRaises(NotImplementedError):
+            r = ResourceMissingCreateDestroy(ensures="absent")
+            r.apply()
+
+    def test_subclass_bad_ensures_value(self):
+        class ResourceBadEnsuresValue(Resource):
+            def __init__(self, ensures: str = "based"):
+                self.ensures = ensures
+                self.state = "init"
+
+            def create(self) -> None:
+                self.state = "created"
+
+            def destroy(self) -> None:
+                self.state = "destroyed"
+
+        with self.assertRaises(ValueError) as context:
+            r = ResourceBadEnsuresValue()
+            r.apply()
+        assert "Unsupported value" in str(context.exception)
+
+    def test_simple_resource_subclass_errors(self):
+        class SimpleResourceMissingApply(SimpleResource):  # pylint: disable=abstract-method
+            def __init__(self) -> None:
+                self.state = "init"
+
+        with self.assertRaises(NotImplementedError):
+            r = SimpleResourceMissingApply()
+            r.apply()
+        with self.assertRaises(RuntimeError):
+            r = SimpleResourceMissingApply()
+            r.create()
+        with self.assertRaises(RuntimeError):
+            r = SimpleResourceMissingApply()
+            r.destroy()
+
+
+class TestWoolUtils(WoolFileSystemTestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.path1 = cls.root / "file1.txt"
+        cls.path2 = cls.root / "file2.txt"
+        cls.path3 = cls.root / "file3.txt"
+
+        cls.path1.write_text(TEST_FILE_SRC)
+        cls.path2.write_text(TEST_FILE_SRC)
+        cls.path3.write_text("")
+
+    def test_shell_success(self):
+        shell(["stat", self.path1])
+
+    def test_shell_failure(self):
+        with self.assertRaises(subprocess.CalledProcessError):
+            shell(["stat", self.root / "this-doesnt-exist"])
+
+    def test_shell_output_success(self):
+        (status, out, err) = shell_output(["stat", self.path1])
+        assert status == 0
+        assert "File:" in out
+        assert err == ""
+
+    def test_shell_output_failure(self):
+        (status, out, err) = shell_output(["stat", self.root / "this-doesnt-exist"])
+        assert status != 0
+        assert "File:" not in out
+        assert "cannot stat" in err
+
+    def test_checksum_path_vs_bytes(self):
+        assert checksum(self.path1) == checksum_bytes(TEST_FILE_SRC.encode())
+
+    def test_file_needs_update(self):
+        assert file_needs_update(self.path1, self.root / "this-doesnt-exist")
+        assert not file_needs_update(self.path1, self.path2)
+        assert file_needs_update(self.path1, self.path3)
+
+
+class TestWoolDirectory(WoolFileSystemTestCase):
     def test_dir_create_and_destroy(self):
         dirname = self.root / "bah"
         d = Directory(dirname)
@@ -172,12 +224,31 @@ class TestWoolResources(WoolTestCase):
         d.apply()
         assert not d.path.is_dir()
 
-    def test_existing_dir_destroy(self):
-        d = Directory(self.existing_dir_for_destroy, ensures="absent")
+    def test_dir_destroy_existing(self):
+        dir_for_destroying = self.root / "foo"
+        dir_for_destroying.mkdir()
+        d = Directory(dir_for_destroying, ensures="absent")
         assert d.path.is_dir()
         d.apply()
         assert not d.path.is_dir()
 
+    def test_dir_skip_destroy_when_not_exists(self):
+        dir_that_does_not_exist = self.root / "the-dir-that-never-was"
+        d = Directory(dir_that_does_not_exist, ensures="absent")
+        with patch("wool.wool.shell") as mock_shell:
+            d.apply()
+            assert not mock_shell.called
+
+    def test_dir_skip_create_when_exists(self):
+        dir_that_already_exists = self.root / "the-dir-that-already-exists"
+        dir_that_already_exists.mkdir()
+        d = Directory(dir_that_already_exists, ensures="present")
+        with patch("wool.wool.shell") as mock_shell:
+            d.apply()
+            assert not mock_shell.called
+
+
+class TestWoolFile(WoolFileSystemTestCase):
     def test_file_contents_create_destroy(self):
         destpath = self.root / "haha.txt"
         f = File(destpath, contents=TEST_FILE_CONTENTS)
@@ -192,8 +263,10 @@ class TestWoolResources(WoolTestCase):
         assert not f.path.is_file()
 
     def test_file_src_create_destroy(self):
+        existing_file_for_src = self.root / "baz.txt"
+        existing_file_for_src.write_text(TEST_FILE_SRC)
         destpath = self.root / "qux.txt"
-        f = File(destpath, src=self.existing_file_for_src)
+        f = File(destpath, src=existing_file_for_src)
         assert not f.path.is_file()
         f.apply()
         assert f.path.is_file()
@@ -205,10 +278,15 @@ class TestWoolResources(WoolTestCase):
         assert not f.path.is_file()
 
     def test_existing_file_destroy(self):
-        f = File(self.existing_file_for_destroy, ensures="absent")
+        existing_file_for_destroy = self.root / "bar.txt"
+        existing_file_for_destroy.write_text("This will be deleted very soon... It's not read anywhere.")
+        f = File(existing_file_for_destroy, ensures="absent")
         assert f.path.is_file()
         f.apply()
         assert not f.path.is_file()
+
+
+class TestWoolResources(WoolFileSystemTestCase):
 
     def test_user_create_destroy(self):
         name = f"test-{self.timestamp}-{uniq()}"
@@ -292,15 +370,17 @@ class TestWoolResources(WoolTestCase):
 
     def test_command_skip_when_provides_exists(self):
         dest = self.root / "test-command-output-skip.txt"
-        dest.write_text("This file exists already.")
+        contents = "This file exists already."
+        dest.write_text(contents)
         with patch("wool.wool.shell") as mock_shell:
             c = Command(["/bin/bash", "-c", f'echo "hey whats up" | tee -a {dest}'], provides=dest)
             assert dest.is_file()
             c.apply()
             assert not mock_shell.called, "shell call should have been skipped because provides file already exists"
+            assert dest.read_text("utf8") == contents
 
 
-class TestWoolOwner(WoolTestCase):
+class TestWoolOwner(WoolFileSystemTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -361,22 +441,19 @@ class TestWoolOwner(WoolTestCase):
             Owner(self.test_file, group="badgroup12345").apply()
 
 
-class TestWoolPerms(WoolTestCase):
+class TestWoolPerms(WoolFileSystemTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.test_file = cls.root / "perms-test.txt"
         cls.test_dir = cls.root / "test-perms-dir"
         cls.test_subdir_file = cls.test_dir / "file1.txt"
 
         # create files/dirs on disk
-        cls.test_file.write_text("Test file for perms.")
         cls.test_dir.mkdir()
         cls.test_subdir_file.write_text("Test file 1")
 
         # perms
         cls.test_dir.chmod(0o744)
-        cls.test_file.chmod(0o644)
         cls.test_subdir_file.chmod(0o644)
 
     def test_symbolic_perms(self):
@@ -396,11 +473,21 @@ class TestWoolPerms(WoolTestCase):
             assert not mock_chmod.called
             assert p.get_mode() == 0o644
 
-    def test_change_perms(self):
-        new_mode = 0o600
-        p = Perms(self.test_file, new_mode)
+    def test_change_perms_with_int_mode(self):
+        test_file = self.root / "perms-int-mode.txt"
+        test_file.write_text("Test file for changing perms with int value for mode.")
+        test_file.chmod(0o600)
+        p = Perms(test_file, 0o644)
         p.apply()
-        assert p.get_mode() == new_mode
+        assert p.get_mode() == 0o644
+
+    def test_change_perms_with_str_mode(self):
+        test_file = self.root / "perms-str-mode.txt"
+        test_file.write_text("Test file for changing perms with string value for mode.")
+        test_file.chmod(0o600)
+        p = Perms(test_file, "644")
+        p.apply()
+        assert p.get_mode() == 0o644
 
     def test_recursive_perms_mocked(self):
         with patch("wool.wool.shell") as mock_shell:
@@ -439,7 +526,6 @@ class TestWoolPerms(WoolTestCase):
         assert [sym.gr, sym.gw, sym.gx] == [True, False, False]
         assert [sym.othr, sym.othw, sym.othx] == [False, False, False]
         assert [sym.setuid, sym.setgid, sym.sticky] == [False, False, False]
-
         p.apply()
         assert p.get_full_mode() == 0o100777
         assert p.get_full_mode_str() == "100777"
@@ -453,7 +539,7 @@ class TestWoolPerms(WoolTestCase):
         assert [sym.setuid, sym.setgid, sym.sticky] == [False, False, False]
 
 
-class TestWoolSymlink(WoolTestCase):
+class TestWoolSymlink(WoolFileSystemTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
