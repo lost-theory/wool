@@ -12,9 +12,9 @@ import shutil
 import stat
 import subprocess
 import sys
-from pathlib import Path
-
 from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Union, Mapping, Any, Optional, Sequence
 
 StrOrPath = Union[str, Path]
@@ -94,18 +94,53 @@ def apt_pkg_is_installed(name: str) -> bool:
     return result
 
 
-class SymbolicPermissions:
-    def __init__(self, mode: int) -> None:
+@dataclass(frozen=True)
+class SymbolicPermissions:  # pylint: disable=too-many-instance-attributes
+    mode: int
+    user_parts: list[bool]
+    group_parts: list[bool]
+    other_parts: list[bool]
+    special_bits: list[bool]
+    ur: bool
+    uw: bool
+    ux: bool
+    gr: bool
+    gw: bool
+    gx: bool
+    othr: bool
+    othw: bool
+    othx: bool
+    setuid: bool
+    setgid: bool
+    sticky: bool
+
+    def __init__(self, mode: int) -> None:  # pylint: disable=too-many-locals
         parts = [bool(mode & mask) for mask in STAT_MODE_MASKS]
-        self.mode = mode
-        self.user_parts = parts[0:3]
-        self.group_parts = parts[3:6]
-        self.other_parts = parts[6:9]
-        self.special_bits = parts[9:12]
-        self.ur, self.uw, self.ux = self.user_parts
-        self.gr, self.gw, self.gx = self.group_parts
-        self.othr, self.othw, self.othx = self.other_parts
-        self.setuid, self.setgid, self.sticky = self.special_bits
+        user_parts = parts[0:3]
+        group_parts = parts[3:6]
+        other_parts = parts[6:9]
+        special_bits = parts[9:12]
+        ur, uw, ux = user_parts
+        gr, gw, gx = group_parts
+        othr, othw, othx = other_parts
+        setuid, setgid, sticky = special_bits
+        object.__setattr__(self, "mode", mode)
+        object.__setattr__(self, "user_parts", user_parts)
+        object.__setattr__(self, "group_parts", group_parts)
+        object.__setattr__(self, "other_parts", other_parts)
+        object.__setattr__(self, "special_bits", special_bits)
+        object.__setattr__(self, "ur", ur)
+        object.__setattr__(self, "uw", uw)
+        object.__setattr__(self, "ux", ux)
+        object.__setattr__(self, "gr", gr)
+        object.__setattr__(self, "gw", gw)
+        object.__setattr__(self, "gx", gx)
+        object.__setattr__(self, "othr", othr)
+        object.__setattr__(self, "othw", othw)
+        object.__setattr__(self, "othx", othx)
+        object.__setattr__(self, "setuid", setuid)
+        object.__setattr__(self, "setgid", setgid)
+        object.__setattr__(self, "sticky", sticky)
 
     def __str__(self) -> str:
         rwx_parts = self.user_parts + self.group_parts + self.other_parts
@@ -154,12 +189,13 @@ class Resource(metaclass=ResourceMeta):
         if not hasattr(self, "ensures"):
             raise AttributeError("Resource subclass must have 'ensures' attribute.")
 
-        if self.ensures == "present":
+        ensures = self.ensures  # pylint: disable=no-member
+        if ensures == "present":
             self.create()
-        elif self.ensures == "absent":
+        elif ensures == "absent":
             self.destroy()
         else:
-            raise ValueError(f"Unsupported value for `ensures`: {self.ensures!r}. Valid values are: {self.ENSURES_VALUES!r}")
+            raise ValueError(f"Unsupported value for `ensures`: {ensures!r}. Valid values are: {self.ENSURES_VALUES!r}")
 
     def create(self) -> None:
         """Create/enable/etc. the resource when ensures='present'."""
@@ -242,12 +278,12 @@ class File(Resource):
 
 
 class User(Resource):
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         username: str,
         group: Optional[str] = None,
         groups: Optional[list[str]] = None,
-        shell: Optional[StrOrPath] = None,
+        shell_bin: Optional[StrOrPath] = None,
         home: Optional[StrOrPath] = None,
         system: bool = False,
         ensures: str = "present",
@@ -255,8 +291,8 @@ class User(Resource):
         self.username = username
         self.primary_group = group
         self.wanted_groups = groups or []
-        self.shell = shell
-        self.home = home
+        self.shell = Path(shell_bin).expanduser() if shell_bin else None
+        self.home = Path(home).expanduser() if home else None
         self.system = system
         self.ensures = ensures
 

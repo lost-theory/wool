@@ -49,7 +49,7 @@ def uniq() -> str:
 class WoolTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.tmpdir = tempfile.TemporaryDirectory()
+        cls.tmpdir = tempfile.TemporaryDirectory()  # pylint: disable=consider-using-with
         cls.root = Path(cls.tmpdir.name)
         cls.timestamp = datetime.now().strftime("%Y%m%d")
 
@@ -125,7 +125,7 @@ class TestWoolResources(WoolTestCase):
                 def destroy(self) -> None:
                     self.state = "destroyed"
 
-            b = BadResource()
+            b = BadResource()  # pylint: disable=unused-variable
 
         assert "must be defined with 'ensures' kwarg" in str(context.exception)
 
@@ -215,7 +215,7 @@ class TestWoolResources(WoolTestCase):
         u = User(
             name,
             system=True,
-            shell="/sbin/nologin",
+            shell_bin="/sbin/nologin",
             home=self.root / "home",
             group="floppy",
             groups=["cdrom"],
