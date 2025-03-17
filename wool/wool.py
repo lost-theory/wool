@@ -27,11 +27,12 @@ STAT_MODE_MASKS = [
     stat.S_IWOTH,
     stat.S_IXOTH,
     stat.S_ISUID,
-    stat.S_ISGID, 
-    stat.S_ISVTX, 
+    stat.S_ISGID,
+    stat.S_ISVTX,
 ]
 
 ## utils ######################################################################
+
 
 def shell(cmd, **kw):
     """Runs `cmd`, raising an error if it fails."""
@@ -85,9 +86,11 @@ def apt_pkg_is_installed(name):
     else:
         raise RuntimeError(f"Unable to parse dkpg-query result: {[status, out, err]}.")
 
+
 class SymbolicPermissions:
     def __init__(self, mode):
         parts = [bool(mode & mask) for mask in STAT_MODE_MASKS]
+        self.mode = mode
         self.user_parts = parts[0:3]
         self.group_parts = parts[3:6]
         self.other_parts = parts[6:9]
@@ -96,21 +99,23 @@ class SymbolicPermissions:
         self.gr, self.gw, self.gx = self.group_parts
         self.otr, self.otw, self.otx = self.other_parts
         self.setuid, self.setgid, self.sticky = self.special_bits
-        
+
     def __str__(self):
         rwx_parts = self.user_parts + self.group_parts + self.other_parts
-        ur, uw, ux, gr, gw, gx, otr, otw, otx = [
-            symbol if is_set else '-' for (symbol, is_set) in zip('rwxrwxrwx', rwx_parts)
-        ]
+        ur, uw, ux, gr, gw, gx, otr, otw, otx = [symbol if is_set else "-" for (symbol, is_set) in zip("rwxrwxrwx", rwx_parts)]
         setuid = "u+s" if self.setuid else "u-s"
         setgid = "g+s" if self.setgid else "g-s"
         sticky = "o+t" if self.setuid else "o-t"
         return f"u={ur}{uw}{ux}, g={gr}{gw}{gx}, o={otr}{otw}{otx}, {setuid}, {setgid}, {sticky}"
 
     def __eq__(self, other):
-        if isinstance(other, str):
-            return str(self) == other
-        return self == other
+        if isinstance(other, SymbolicPermissions):
+            return self.mode == other.mode
+        return str(self) == str(other)
+
+    def __ne__(self, other):
+        return not self == other
+
 
 ## resource base classes ######################################################
 
@@ -401,7 +406,7 @@ class Owner(SimpleResource):
 
         recursive_flag = []
         if self.recursive:
-            recursive_flag = ["-R"] 
+            recursive_flag = ["-R"]
         else:
             # only do current owner/group check for single file ownership change
             if uid == current_uid and gid == current_gid:
@@ -434,7 +439,6 @@ class Perms(SimpleResource):
     def get_symbolic(self):
         mode = self.get_full_mode()
         return SymbolicPermissions(mode)
-
 
     def apply(self):
         if not self.path.exists():

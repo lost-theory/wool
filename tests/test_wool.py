@@ -28,6 +28,7 @@ from wool.wool import (
     Owner,
     Perms,
     Symlink,
+    SymbolicPermissions,
     shell,
     shell_output,
     checksum,
@@ -44,11 +45,22 @@ def uniq():
     return "".join(random.sample(string.ascii_lowercase, 14))
 
 
-class TestWoolUtils(unittest.TestCase):
+class WoolTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmpdir = tempfile.TemporaryDirectory()
         cls.root = Path(cls.tmpdir.name)
+        cls.timestamp = datetime.now().strftime("%Y%m%d")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmpdir.cleanup()
+
+
+class TestWoolUtils(WoolTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
         cls.path1 = cls.root / "file1.txt"
         cls.path2 = cls.root / "file2.txt"
         cls.path3 = cls.root / "file3.txt"
@@ -56,10 +68,6 @@ class TestWoolUtils(unittest.TestCase):
         cls.path1.write_text(TEST_FILE_SRC)
         cls.path2.write_text(TEST_FILE_SRC)
         cls.path3.write_text("")
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.tmpdir.cleanup()
 
     def test_shell_success(self):
         shell(["stat", self.path1])
@@ -89,13 +97,10 @@ class TestWoolUtils(unittest.TestCase):
         assert file_needs_update(self.path1, self.path3) == True
 
 
-class TestWoolResources(unittest.TestCase):
+class TestWoolResources(WoolTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tmpdir = tempfile.TemporaryDirectory()
-        cls.root = Path(cls.tmpdir.name)
-        cls.timestamp = datetime.now().strftime("%Y%m%d")
-
+        super().setUpClass()
         cls.existing_dir_for_destroy = cls.root / "foo"
         os.mkdir(cls.existing_dir_for_destroy)
 
@@ -106,10 +111,6 @@ class TestWoolResources(unittest.TestCase):
         cls.existing_file_for_destroy = cls.root / "bar.txt"
         with open(cls.existing_file_for_destroy, "w") as f:
             f.write("This will be deleted very soon... It's not read anywhere.")
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.tmpdir.cleanup()
 
     def test_metaclass_ensures_required_by_init(self):
         with self.assertRaises(TypeError) as context:
@@ -149,6 +150,7 @@ class TestWoolResources(unittest.TestCase):
                 self.state = "applied"
 
         g = GoodSimpleResource()
+        assert g.state == "nothing"
         g.apply()
         assert g.state == "applied"
 
@@ -283,126 +285,143 @@ class TestWoolResources(unittest.TestCase):
             contents_on_disk = f.read()
         assert contents + "\n" == contents_on_disk
 
-    def test_ownership(self):
-        current_user = pwd.getpwuid(os.getuid()).pw_name
-        current_group = grp.getgrgid(os.getgid()).gr_name
-        test_dir = self.root / "test-ownership-dir"
-        test_dir.mkdir()
 
-        test_file = self.root / "test-ownership-file.txt"
-        test_file.write_text("This file is for testing ownership changes.")
+class TestWoolOwner(WoolTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.current_user = pwd.getpwuid(os.getuid()).pw_name
+        cls.current_group = grp.getgrgid(os.getgid()).gr_name
+        cls.test_dir = cls.root / "test-ownership-dir"
+        cls.test_dir.mkdir()
+        cls.test_file = cls.root / "test-ownership-file.txt"
+        cls.test_file.write_text("This file is for testing ownership changes.")
 
-        # User and group
+    def test_no_change_when_ownership_correct(self):
         with patch("wool.wool.shell") as mock_shell:
-            o = Owner(test_file, user=current_user, group=current_group)
+            o = Owner(self.test_file, user=self.current_user, group=self.current_group)
             o.apply()
             assert not mock_shell.called, "ownership is already correct, shell call should have been skipped"
 
-        # Different user and group
+    def test_change_user_and_group(self):
         with patch("wool.wool.shell") as mock_shell:
-            o = Owner(test_file, user="root", group="root")
+            o = Owner(self.test_file, user="root", group="root")
             o.apply()
             mock_shell.assert_called_once()
             assert "chown" in mock_shell.call_args.args[0]
             assert "0:0" in mock_shell.call_args.args[0]
 
-        # User only
+    def test_change_user_only(self):
         with patch("wool.wool.shell") as mock_shell:
-            o = Owner(test_file, user="root")
+            o = Owner(self.test_file, user="root")
             o.apply()
             mock_shell.assert_called_once()
             assert "chown" in mock_shell.call_args.args[0]
 
-        # Group only
+    def test_change_group_only(self):
         with patch("wool.wool.shell") as mock_shell:
-            o = Owner(test_file, group="root")
+            o = Owner(self.test_file, group="root")
             o.apply()
             mock_shell.assert_called_once()
             assert "chown" in mock_shell.call_args.args[0]
 
-        # Recursive
+    def test_recursive_ownership(self):
         with patch("wool.wool.shell") as mock_shell:
-            o = Owner(test_dir, user="root", group="root", recursive=True)
+            o = Owner(self.test_dir, user="root", group="root", recursive=True)
             o.apply()
             mock_shell.assert_called_once()
             assert "chown" in mock_shell.call_args.args[0]
             assert "-R" in mock_shell.call_args.args[0]
 
-        # File doesn't exist
+    def test_nonexistent_file(self):
         with patch("wool.wool.shell") as mock_shell:
             with self.assertRaises(RuntimeError):
-                o = Owner(self.root / "nonexistent-file.txt", user=current_user)
+                o = Owner(self.root / "nonexistent-file.txt", user=self.current_user)
                 o.apply()
 
-        # Test with invalid arguments
+    def test_invalid_arguments(self):
         with self.assertRaises(ValueError):
-            Owner(test_file).apply()
+            Owner(self.test_file).apply()
         with self.assertRaises(KeyError):
-            Owner(test_file, user="baduser12345").apply()
+            Owner(self.test_file, user="baduser12345").apply()
         with self.assertRaises(KeyError):
-            Owner(test_file, group="badgroup12345").apply()
+            Owner(self.test_file, group="badgroup12345").apply()
 
-    def test_perms(self):
-        test_file = self.root / "perms-test.txt"
-        test_file.write_text("Test file for perms.")
 
-        # Create a test directory with files for recursive tests
-        test_dir = self.root / "test-perms-dir"
-        test_dir.mkdir()
-        (test_dir / "file1.txt").write_text("Test file 1")
-        (test_dir / "file2.txt").write_text("Test file 2")
+class TestWoolPerms(WoolTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.test_file = cls.root / "perms-test.txt"
+        cls.test_dir = cls.root / "test-perms-dir"
+        cls.test_subdir_file = cls.test_dir / "file1.txt"
 
-        # set initial perms
-        initial_mode = 0o644
-        test_file.chmod(initial_mode)
+        # create files/dirs on disk
+        cls.test_file.write_text("Test file for perms.")
+        cls.test_dir.mkdir()
+        cls.test_subdir_file.write_text("Test file 1")
 
-        # no-op for same perms
+        # perms
+        cls.test_dir.chmod(0o744)
+        cls.test_file.chmod(0o644)
+        cls.test_subdir_file.chmod(0o644)
+
+    def test_symbolic_perms(self):
+        s = SymbolicPermissions(0o644)
+        expected_str = "u=rw-, g=r--, o=r--, u-s, g-s, o-t"
+        assert s == expected_str and expected_str == s
+        assert s == SymbolicPermissions(0o644) and SymbolicPermissions(0o644) == s
+        assert s != SymbolicPermissions(0o755) and SymbolicPermissions(0o755) != s
+
+    def test_no_change_when_perms_match(self):
+        self.test_file_for_no_change = self.root / "perms-test-no-change.txt"
+        self.test_file_for_no_change.write_text("Test file for perms (no change).")
+        self.test_file_for_no_change.chmod(0o644)
         with patch.object(WoolPath, "chmod", new=MagicMock()) as mock_chmod:
-            p = Perms(test_file, initial_mode)
+            p = Perms(self.test_file_for_no_change, 0o644)
             p.apply()
             assert not mock_chmod.called
-            assert stat.S_IMODE(test_file.stat().st_mode) == initial_mode
+            assert p.get_mode() == 0o644
 
-        # change perms
+    def test_change_perms(self):
         new_mode = 0o600
-        p = Perms(test_file, new_mode)
+        p = Perms(self.test_file, new_mode)
         p.apply()
-        assert stat.S_IMODE(test_file.stat().st_mode) == new_mode
+        assert p.get_mode() == new_mode
 
-        # test recursive permissions (mocked)
+    def test_recursive_perms_mocked(self):
         with patch("wool.wool.shell") as mock_shell:
-            p = Perms(test_dir, 0o755, recursive=True)
+            p = Perms(self.test_dir, 0o755, recursive=True)
             p.apply()
             mock_shell.assert_called_once()
             assert "chmod" in mock_shell.call_args.args[0]
             assert "-R" in mock_shell.call_args.args[0]
             assert "755" in mock_shell.call_args.args[0]
 
-        # test recursive permissions (real)
-        p = Perms(test_dir, 0o744, recursive=True)
-        p.apply()
-        p = Perms(test_dir, 0o777, recursive=True)
-        p.apply()
-        p = Perms(test_dir, 0o744, recursive=True)
-        p.apply()
+    def test_recursive_perms_real(self):
+        modes = [0o744, 0o777, 0o744]
+        for mode in modes:
+            p = Perms(self.test_dir, mode, recursive=True)
+            p.apply()
+            assert p.get_mode() == mode
 
-        # verify exception raised when file doesn't exist
+    def test_nonexistent_file(self):
         with self.assertRaises(RuntimeError):
             p = Perms(self.root / "nonexistent-file.txt", 0o644)
             p.apply()
 
-    def test_perms_getting_mode_attrs(self):
+    def test_mode_attrs(self):
         test_file = self.root / "perms-mode-attrs-tests.txt"
         test_file.write_text("Test file for reading perms mode attrs.")
         test_file.chmod(0o640)
-        
+
         p = Perms(test_file, 0o777)
         assert p.get_full_mode() == 0o100640
         assert p.get_full_mode_str() == "100640"
         assert p.get_mode() == 0o640
         assert p.get_mode_str() == "640"
         sym = p.get_symbolic()
-        assert sym == 'u=rw-, g=r--, o=---, u-s, g-s, o-t'
+        assert sym == "u=rw-, g=r--, o=---, u-s, g-s, o-t"
         assert [sym.ur, sym.uw, sym.ux] == [True, True, False]
         assert [sym.gr, sym.gw, sym.gx] == [True, False, False]
         assert [sym.otr, sym.otw, sym.otx] == [False, False, False]
@@ -414,74 +433,75 @@ class TestWoolResources(unittest.TestCase):
         assert p.get_mode() == 0o777
         assert p.get_mode_str() == "777"
         sym = p.get_symbolic()
-        assert sym == 'u=rwx, g=rwx, o=rwx, u-s, g-s, o-t'
+        assert sym == "u=rwx, g=rwx, o=rwx, u-s, g-s, o-t"
         assert [sym.ur, sym.uw, sym.ux] == [True, True, True]
         assert [sym.gr, sym.gw, sym.gx] == [True, True, True]
         assert [sym.otr, sym.otw, sym.otx] == [True, True, True]
         assert [sym.setuid, sym.setgid, sym.sticky] == [False, False, False]
 
 
+class TestWoolSymlink(WoolTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.src_file = cls.root / "symlink-src.txt"
+        cls.src_file.write_text("Target file for symlink tests.")
+        cls.src_wrong = cls.root / "symlink-src-wrong.txt"
+        cls.src_wrong.write_text("This is the wrong target.")
+        cls.existing_file = cls.root / "existing-file.txt"
+        cls.existing_file.write_text("This is an existing file")
+        cls.src_nonexistent = cls.root / "this-src-file-does-not-exist.txt"
+        cls.link_path = cls.root / "symlink-test.txt"
+        cls.link_path_for_change_target = cls.root / "symlink-that-will-have-its-target-changed.txt"
+        cls.nonexistent_link_path = cls.root / "nonexistent-symlink.txt"
 
-    def test_symlink(self):
-        # Create paths and source files
-        src_file = self.root / "symlink-src.txt"
-        src_file.write_text("Target file for symlink tests.")
-        src_wrong = self.root / "symlink-src-wrong.txt"
-        src_wrong.write_text("This is the wrong target.")
-        existing_file = self.root / "existing-file.txt"
-        existing_file.write_text("This is an existing file")
-        src_nonexistent = self.root / "this-src-file-does-not-exist.txt"
-        link_path = self.root / "symlink-test.txt"
-        nonexistent_link_path = self.root / "nonexistent-symlink.txt"
-
-        # Create a symlink to the target
-        s = Symlink(link_path, src_file)
+    def test_create_symlink(self):
+        s = Symlink(self.link_path, self.src_file)
         s.apply()
 
-        # Verify the symlink was created and points to the correct target
-        assert link_path.is_symlink()
-        assert link_path.readlink() == src_file
-        assert link_path.read_bytes() == src_file.read_bytes()
+        assert self.link_path.is_symlink()
+        assert self.link_path.readlink() == self.src_file
+        assert self.link_path.read_bytes() == self.src_file.read_bytes()
 
-        # Test no-op when symlink already exists and points to correct target
+    def test_no_change_when_symlink_already_exists(self):
         with patch("builtins.print") as mock_print:
+            s = Symlink(self.link_path, self.src_file)
             s.apply()
             assert "Skipping symlink creation" in repr(mock_print.call_args_list)
 
-        # Manually point `link_path` to `src_wrong`
-        os.unlink(link_path)
-        os.symlink(src=src_wrong, dst=link_path)
-        assert link_path.is_symlink()
-        assert link_path.readlink() == src_wrong
-
-        # Recreate the symlink and verify it again points to src_file
-        s = Symlink(link_path, src_file)
+    def test_change_symlink_target(self):
+        os.symlink(src=self.src_wrong, dst=self.link_path_for_change_target)
+        assert self.link_path_for_change_target.is_symlink()
+        assert self.link_path_for_change_target.readlink() == self.src_wrong
+        s = Symlink(self.link_path_for_change_target, self.src_file)
         s.apply()
-        assert link_path.is_symlink()
-        assert link_path.readlink() == src_file
+        assert self.link_path_for_change_target.is_symlink()
+        assert self.link_path_for_change_target.readlink() == self.src_file
 
-        # Test error when a file exists at the symlink path
-        s = Symlink(existing_file, src_file)
+    def test_error_when_file_exists_at_symlink_path(self):
+        s = Symlink(self.existing_file, self.src_file)
         with self.assertRaises(RuntimeError) as context:
             s.apply()
         assert "already exists" in str(context.exception)
 
-        # Verify that symlinks can be created for target paths that don't exist
-        s = Symlink(nonexistent_link_path, src_nonexistent)
+    def test_create_symlink_for_nonexistent_target(self):
+        s = Symlink(self.nonexistent_link_path, self.src_nonexistent)
         s.apply()
-        assert nonexistent_link_path.is_symlink()
-        assert nonexistent_link_path.readlink() == src_nonexistent
+        assert self.nonexistent_link_path.is_symlink()
+        assert self.nonexistent_link_path.readlink() == self.src_nonexistent
 
-        # Test destroying a symlink
+    def test_destroy_symlink(self):
         destroy_link_path = self.root / "symlink-to-destroy.txt"
-        os.symlink(src=src_file, dst=destroy_link_path)
+        os.symlink(src=self.src_file, dst=destroy_link_path)
         assert destroy_link_path.is_symlink()
 
-        s = Symlink(destroy_link_path, src_file, ensures="absent")
+        s = Symlink(destroy_link_path, self.src_file, ensures="absent")
         s.apply()
         assert not destroy_link_path.exists()
 
-        # Test no-op when trying to destroy a non-existent symlink
+    def test_no_change_when_destroying_nonexistent_symlink(self):
+        destroy_link_path = self.root / "this-path-does-not-exist.txt"
         with patch("builtins.print") as mock_print:
-            s.apply()  # Try to destroy again
+            s = Symlink(destroy_link_path, self.src_file, ensures="absent")
+            s.apply()
             assert "Skipping removal of symlink" in repr(mock_print.call_args_list)
