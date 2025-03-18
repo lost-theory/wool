@@ -563,10 +563,11 @@ class TestWoolSymlink(WoolFileSystemTestCase):
         assert self.link_path.read_bytes() == self.src_file.read_bytes()
 
     def test_no_change_when_symlink_already_exists(self):
-        with patch("builtins.print") as mock_print:
+        with patch("wool.Symlink.logger") as mock_logger:
             s = Symlink(self.link_path, self.src_file)
             s.apply()
-            assert "Skipping symlink creation" in repr(mock_print.call_args_list)
+            assert "Skipping" in mock_logger.info.call_args_list[0].kwargs['action']
+            assert "already points to" in mock_logger.info.call_args_list[0].kwargs['because']
 
     def test_change_symlink_target(self):
         os.symlink(src=self.src_wrong, dst=self.link_path_for_change_target)
@@ -600,7 +601,8 @@ class TestWoolSymlink(WoolFileSystemTestCase):
 
     def test_no_change_when_destroying_nonexistent_symlink(self):
         destroy_link_path = self.root / "this-path-does-not-exist.txt"
-        with patch("builtins.print") as mock_print:
+        with patch("wool.Symlink.logger") as mock_logger:
             s = Symlink(destroy_link_path, self.src_file, ensures="absent")
             s.apply()
-            assert "Skipping removal of symlink" in repr(mock_print.call_args_list)
+            assert "Skipping" in mock_logger.info.call_args_list[0].kwargs['action']
+            assert "does not exist" in mock_logger.info.call_args_list[0].kwargs['because']

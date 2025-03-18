@@ -6,6 +6,7 @@ import argparse
 import grp
 import hashlib
 import inspect
+import logging
 import os
 import pwd
 import shutil
@@ -36,12 +37,74 @@ STAT_MODE_MASKS = [
     stat.S_ISVTX,
 ]
 
+## logging setup ##############################################################
+
+STRUCTURED_LOG_ORDER_BEGINNING_KEYS = ["action", "cmd", "kw", "path", "src"]
+STRUCTURED_LOG_ORDER_END_KEYS = ["because"]
+
+
+class WoolLoggingFormatter(logging.Formatter):
+    @staticmethod
+    def message_item_sorter(item: tuple[Any, Any]) -> tuple[int, Any]:
+        key, _ = item
+        if key in STRUCTURED_LOG_ORDER_BEGINNING_KEYS:
+            sort_key = (0, STRUCTURED_LOG_ORDER_BEGINNING_KEYS.index(key))
+        elif key in STRUCTURED_LOG_ORDER_END_KEYS:
+            sort_key = (2, STRUCTURED_LOG_ORDER_END_KEYS.index(key))
+        else:
+            sort_key = (1, key)
+        return sort_key
+
+    def format(self, record: Any) -> str:
+        if record.name.startswith("wool."):
+            # turn e.g. name='wool.Directory', funcName='create' into 'Directory.create' instead of 'wool.Directory.create'
+            record.funcName = f"{record.name.replace('wool.', '')}.{record.funcName}"
+
+        if isinstance(record.msg, dict):
+            items = sorted(record.msg.items(), key=self.message_item_sorter)
+            record.msg = " ".join([f"{k}={v!r}" for k, v in items])
+
+        return super().format(record)
+
+
+class StructuredLogger:
+    @staticmethod
+    def make_log_level_function(wrapped: Callable[..., None]) -> Callable[..., None]:
+        """
+        Wrapper that passes kwargs (i.e. a dict that represents a structured
+        log entry) to the underlying log level function. The stacklevel=2 is
+        used to skip this wrapper and look up the actual site of the logging
+        call to get the proper %(funcName)s.
+        """
+
+        def wrapper(**kwargs: Any) -> None:
+            return wrapped(kwargs, stacklevel=2)
+
+        return wrapper
+
+    def __init__(self, _logger: logging.Logger) -> None:
+        self.logger = _logger
+        self.debug = self.make_log_level_function(self.logger.debug)
+        self.info = self.make_log_level_function(self.logger.info)
+        self.warning = self.make_log_level_function(self.logger.warning)
+        self.error = self.make_log_level_function(self.logger.error)
+        self.critical = self.make_log_level_function(self.logger.critical)
+
+
+formatter = WoolLoggingFormatter("[%(asctime)s] [%(levelname)s] %(funcName)s: %(message)s")
+parent_logger = logging.getLogger("wool")
+handler = logging.StreamHandler()
+parent_logger.setLevel(logging.DEBUG)
+handler.setFormatter(formatter)
+parent_logger.addHandler(handler)
+logger = StructuredLogger(parent_logger)
+
 ## utils ######################################################################
 
 
 def shell(cmd: Sequence[StrOrPath], **kw: Any) -> None:
     """Runs `cmd`, raising an error if it fails."""
-    print(f"Running: {cmd} with {kw}")
+    logger.info(action="Running", cmd=cmd, kw=kw)
     subprocess.check_call(cmd, **kw)
 
 
@@ -50,7 +113,7 @@ def shell_output(cmd: Sequence[StrOrPath], **kw: Any) -> tuple[int, str, str]:
     Runs `cmd`, returning (returncode, stdout, stderr). Does not raise an error
     on command failure.
     """
-    print(f"Getting output from: {cmd} with {kw}")
+    logger.info(action="Running", cmd=cmd, kw=kw)
     result = subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kw)
     return (result.returncode, result.stdout, result.stderr)
 
@@ -184,8 +247,12 @@ class ResourceMeta(type):
 class Resource(metaclass=ResourceMeta):
     ENSURES_VALUES = ["present", "absent"]
 
+    @property
+    def logger(self) -> StructuredLogger:
+        return StructuredLogger(logging.getLogger(f"wool.{self.__class__.__name__}"))
+
     def apply(self) -> None:
-        """Apply the resource based on its ensures value."""
+        """Create/destroy the resource based on its ensures value."""
         if not hasattr(self, "ensures"):
             raise AttributeError("Resource subclass must have 'ensures' attribute.")
 
@@ -227,13 +294,13 @@ class Directory(Resource):
 
     def create(self) -> None:
         if self.path.is_dir():
-            print(f"Skipping directory creation of {self.path} because it already exists.")
+            self.logger.info(action="Skipping directory creation", path=self.path, because="already exists")
         else:
             shell(["mkdir", "-p", self.path])
 
     def destroy(self) -> None:
         if not self.path.is_dir():
-            print(f"Skipping directory removal of {self.path} because it doesn't exist.")
+            self.logger.info(action="Skipping directory removal", path=self.path, because="does not exist")
         else:
             shell(["rm", "-rf", self.path])
 
@@ -253,7 +320,7 @@ class File(Resource):
             if file_needs_update(self.src, self.path):
                 shutil.copy(self.src, self.path)
             else:
-                print(f"Skipping copy of {self.src!r} to {self.path!r} because files match.")
+                self.logger.info(action="Skipping copy", src=self.src, path=self.path, because="files already match")
         elif self.contents:
             if isinstance(self.contents, bytes):
                 new_contents = self.contents
@@ -266,7 +333,7 @@ class File(Resource):
                 with open(self.path, "wb") as f:
                     f.write(new_contents)
             else:
-                print(f"Skipping file write to {self.path!r} because checksum matches contents.")
+                self.logger.info(action="Skipping write", path=self.path, because="checksum matches contents")
         else:
             raise ValueError("At least one of `src` or `contents` must be specified.")
 
@@ -274,7 +341,7 @@ class File(Resource):
         if self.path.is_file():
             os.unlink(self.path)
         else:
-            print(f"Skipping removal of {self.path!r} beacause it does not exist.")
+            self.logger.info(action="Skipping removal", path=self.path, because="file does not exist")
 
 
 class User(Resource):
@@ -309,7 +376,7 @@ class User(Resource):
 
     def create(self) -> None:
         if self.exists():
-            print(f"Skipping user creation for {self.username!r} because user already exists.")
+            self.logger.info(action="Skipping user creation", username=self.username, because="user already exists")
         else:
             cmd = ["sudo", "useradd"]
             if self.system:
@@ -339,7 +406,7 @@ class User(Resource):
         if self.exists():
             shell(["sudo", "userdel", "-r", self.username])
         else:
-            print(f"Skipping user deletion for {self.username!r} because user doesn't exist.")
+            self.logger.info(action="Skipping user deletion", username=self.username, because="user doesn't exist")
 
 
 class Group(Resource):
@@ -357,7 +424,7 @@ class Group(Resource):
 
     def create(self) -> None:
         if self.exists():
-            print(f"Skipping group creation for {self.groupname!r} because group already exists.")
+            self.logger.info(action="Skipping group creation", groupname=self.groupname, because="group already exists")
             return
         cmd = ["sudo", "groupadd"]
         if self.system:
@@ -369,7 +436,7 @@ class Group(Resource):
         if self.exists():
             shell(["sudo", "groupdel", self.groupname])
         else:
-            print(f"Skipping group deletion for {self.groupname!r} because group doesn't exist.")
+            self.logger.info(action="Skipping group deletion", groupname=self.groupname, because="group doesn't exist")
 
 
 class Download(SimpleResource):
@@ -379,7 +446,7 @@ class Download(SimpleResource):
 
     def apply(self) -> None:
         if self.provides.is_file():
-            print(f"Skipping download {self.url} because {self.provides} exists.")
+            self.logger.info(action="Skipping download", url=self.url, provides=self.provides, because="`provides` already exists")
             return
         shell(["curl", "-L", "-o", self.provides, self.url])
 
@@ -403,13 +470,13 @@ class AptPackage(Resource):
         if needs_install:
             apt_pkg_install(self.name)
         else:
-            print(f"Skipping package install of {self.name} because it's already installed.")
+            self.logger.info(action="Skipping package install", name=self.name, because="already installed")
 
     def destroy(self) -> None:
         if self.is_installed():
             apt_pkg_remove(self.name)
         else:
-            print(f"Skipping package removal of {self.name} because it's not installed.")
+            self.logger.info(action="Skipping package removal", name=self.name, because="not installed")
 
 
 class Virtualenv(SimpleResource):
@@ -420,7 +487,7 @@ class Virtualenv(SimpleResource):
 
     def apply(self) -> None:
         if self.path.exists():
-            print(f"Skipping venv creation of {self.path} because it already exists.")
+            self.logger.info(action="Skipping venv creation", path=self.path, because="already exists")
             return
         shell([self.python_bin, "-mvenv", self.path])
 
@@ -432,7 +499,7 @@ class Command(SimpleResource):
 
     def apply(self) -> None:
         if self.provides and self.provides.exists():
-            print(f"Skipping command {self.cmd} because {self.provides} already exists.")
+            self.logger.info(action="Skipping command run", cmd=self.cmd, provides=self.provides, because="`provides` already exists")
             return
         shell(self.cmd)
 
@@ -468,7 +535,7 @@ class Owner(SimpleResource):
         else:
             # only do current owner/group check for single file ownership change
             if uid == current_uid and gid == current_gid:
-                print(f"Skipping ownership change for {self.path!r} because it already has the correct ownership.")
+                self.logger.info(action="Skipping ownership change", path=self.path, because="already has correct ownership")
                 return
 
         shell(["sudo", "chown"] + recursive_flag + [f"{uid}:{gid}", self.path])
@@ -509,7 +576,7 @@ class Perms(SimpleResource):
             # run chmod when current mode doesn't match desired mode
             self.path.chmod(self.mode)
         else:
-            print(f"Skipping permission change for {self.path!r} because it already has mode {oct(self.mode)}.")
+            self.logger.info(action="Skipping perms change", path=self.path, mode=oct(self.mode), because="already has correct mode")
 
 
 class Symlink(Resource):
@@ -520,7 +587,7 @@ class Symlink(Resource):
 
     def create(self) -> None:
         if not self.src.exists():
-            print(f"Warning! Source {self.src!r} does not exist, but creating symlink anyway.")
+            self.logger.warning(src=self.src, msg="`src` does not exist, but will create symlink anyway")
 
         if self.path.exists() and not self.path.is_symlink():
             raise RuntimeError(f"Cannot create symlink at {self.path!r} because a file or directory already exists there.")
@@ -528,21 +595,21 @@ class Symlink(Resource):
         if self.path.is_symlink():
             current_src = Path(os.readlink(self.path))
             if current_src == self.src:
-                print(f"Skipping symlink creation for {self.path!r} because it already points to {self.src!r}.")
+                self.logger.info(action="Skipping symlink creation", path=self.path, src=self.src, because="already points to `src`")
                 return
-            print(f"Updating symlink {self.path!r} to point to {self.src!r} instead of {current_src!r}.")
+            self.logger.info(action="Updating existing symlink", path=self.path, new_src=self.src, current_src=current_src)
             self.path.unlink()
 
         # Create the symlink
         os.symlink(src=self.src, dst=self.path)
-        print(f"Created symlink from {self.path!r} to {self.src!r}.")
+        self.logger.info(action="Created symlink", path=self.path, src=self.src)
 
     def destroy(self) -> None:
         if self.path.is_symlink():
             self.path.unlink()
-            print(f"Removed symlink {self.path!r}.")
+            self.logger.info(action="Removed symlink", path=self.path)
         else:
-            print(f"Skipping removal of symlink {self.path!r} because it doesn't exist.")
+            self.logger.info(action="Skipping removal of symlink", path=self.path, because="does not exist")
 
 
 ## main #######################################################################
