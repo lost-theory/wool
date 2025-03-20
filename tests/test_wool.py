@@ -2,6 +2,8 @@
 Test suite for wool.
 """
 
+# pylint: disable=unused-variable
+
 import grp
 import os
 import pwd
@@ -30,6 +32,7 @@ from wool.wool import (
     Perms,
     Symlink,
     SymbolicPermissions,
+    BlockInFile,
     shell,
     shell_output,
     checksum,
@@ -566,8 +569,8 @@ class TestWoolSymlink(WoolFileSystemTestCase):
         with patch("wool.Symlink.logger") as mock_logger:
             s = Symlink(self.link_path, self.src_file)
             s.apply()
-            assert "Skipping" in mock_logger.info.call_args_list[0].kwargs['action']
-            assert "already points to" in mock_logger.info.call_args_list[0].kwargs['because']
+            assert "Skipping" in mock_logger.info.call_args_list[0].kwargs["action"]
+            assert "already points to" in mock_logger.info.call_args_list[0].kwargs["because"]
 
     def test_change_symlink_target(self):
         os.symlink(src=self.src_wrong, dst=self.link_path_for_change_target)
@@ -604,5 +607,174 @@ class TestWoolSymlink(WoolFileSystemTestCase):
         with patch("wool.Symlink.logger") as mock_logger:
             s = Symlink(destroy_link_path, self.src_file, ensures="absent")
             s.apply()
-            assert "Skipping" in mock_logger.info.call_args_list[0].kwargs['action']
-            assert "does not exist" in mock_logger.info.call_args_list[0].kwargs['because']
+            assert "Skipping" in mock_logger.info.call_args_list[0].kwargs["action"]
+            assert "does not exist" in mock_logger.info.call_args_list[0].kwargs["because"]
+
+
+class TestWoolBlockInFile(WoolFileSystemTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.start_marker = "# {start}"
+        cls.end_marker = "# {end}"
+        cls.default_contents = "# This is a file where blocks will go for testing.\n"
+        cls.line1 = "This is a managed block line."
+        cls.line2 = "This is a modified block line."
+
+    def test_create_block_in_nonexistent_file(self):
+        block_file = self.root / "test1.txt"
+        assert not block_file.exists()
+        b = BlockInFile(block_file, name="block1", start_marker=self.start_marker, end_marker=self.end_marker, contents=self.line1)
+        b.apply()
+        contents = block_file.read_text()
+        assert self.default_contents not in contents
+        assert b.start in contents
+        assert b.end in contents
+        assert self.line1 in contents
+
+    def test_create_block_in_existing_file(self):
+        block_file = self.root / "test2.txt"
+        block_file.write_text(self.default_contents)
+        b = BlockInFile(block_file, name="block1", start_marker=self.start_marker, end_marker=self.end_marker, contents=self.line1)
+        b.apply()
+        contents = block_file.read_text()
+        assert b.start in contents
+        assert b.end in contents
+        assert self.line1 in contents
+        assert self.default_contents in contents
+
+    def test_no_change_when_block_already_exists(self):
+        block_file = self.root / "test3.txt"
+        block_file.write_text(self.default_contents)
+        b = BlockInFile(block_file, name="block1", start_marker=self.start_marker, end_marker=self.end_marker, contents=self.line1)
+        b.apply()
+
+        with patch("wool.BlockInFile.logger") as mock_logger:
+            b = BlockInFile(block_file, name="block1", start_marker=self.start_marker, end_marker=self.end_marker, contents=self.line1)
+            b.apply()
+            assert "Skipping" in mock_logger.info.call_args_list[0].kwargs["action"]
+            assert "block content already matches" in mock_logger.info.call_args_list[0].kwargs["because"]
+
+    def test_update_block(self):
+        block_file = self.root / "test4.txt"
+        block_file.write_text(self.default_contents)
+        b1 = BlockInFile(block_file, name="block1", start_marker=self.start_marker, end_marker=self.end_marker, contents=self.line1)
+        b1.apply()
+        b2 = BlockInFile(block_file, name="block1", start_marker=self.start_marker, end_marker=self.end_marker, contents=self.line2)
+        b2.apply()
+        contents = block_file.read_text()
+        assert self.default_contents in contents
+        assert b1.start == b2.start
+        assert b1.end == b2.end
+        assert b2.start in contents
+        assert b2.end in contents
+        assert self.line1 not in contents
+        assert self.line2 in contents
+
+    def test_new_line_behavior(self):
+        """
+        Early on in implementation I was adding a bunch of extra new lines to
+        the file when addding/removing blocks. This is a regression test that
+        verifies the extra new lines aren't getting added back somehow. Adding
+        and removing a block should only add <=1 extra new line to the file.
+        """
+        block_file = self.root / "test5.txt"
+        block_file.write_text(self.default_contents)
+        num_blocks = 10
+        num_new_lines_per_block = 4  # 2 for start, 1 for contents, 1 for end
+        for i in range(num_blocks):
+            b = BlockInFile(block_file, name=f"block{i}", start_marker=self.start_marker, end_marker=self.end_marker, contents=self.line1)
+            b.apply()
+        contents_after_adding = block_file.read_text()
+        assert self.default_contents in contents_after_adding
+        assert contents_after_adding.count("\n") <= num_blocks * num_new_lines_per_block + 1, "Too many new lines added to file while adding blocks..."
+        for i in range(num_blocks):
+            b = BlockInFile(block_file, name=f"block{i}", start_marker=self.start_marker, end_marker=self.end_marker, ensures="absent")
+            b.apply()
+        contents_after_removing = block_file.read_text()
+        assert contents_after_removing.count("\n") <= 2, "Too many new lines added to file after removing blocks..."
+
+    def test_different_markers(self):
+        block_file = self.root / "test6.css"
+        block_file.write_text("/* My CSS file with blocks */")
+        css_marker_start = "/* for CSS maybe... {start} */"
+        css_marker_end = "/* that's all folks! {end} */"
+        b = BlockInFile(
+            block_file,
+            name="block1",
+            start_marker=css_marker_start,
+            end_marker=css_marker_end,
+            contents="""
+            body { font-size: 10px; }
+            h1 {
+                color: chartreuse;
+                font-size: 14px;
+            }
+        """,
+        )
+        b.apply()
+        contents = block_file.read_text()
+        assert "My CSS file with blocks" in contents
+        assert "/* for CSS maybe..." in contents
+        assert "/* that's all folks!" in contents
+        assert "font-size" in contents
+        assert "chartreuse" in contents
+
+        b = BlockInFile(block_file, name="block1", start_marker=css_marker_start, end_marker=css_marker_end, ensures="absent")
+        b.apply()
+        assert "chartreuse" not in block_file.read_text()
+
+    def test_init_validation(self):
+        block_file = self.root / "test7.txt"
+        with self.assertRaises(AssertionError):
+            b = BlockInFile(block_file, name="block1", start_marker="# foo", end_marker=self.end_marker, contents=self.line1)
+        with self.assertRaises(AssertionError):
+            b = BlockInFile(block_file, name="block1", start_marker=self.start_marker, end_marker="# bar", contents=self.line1)
+        with self.assertRaises(AssertionError):
+            b = BlockInFile(block_file, name="block1", start_marker=self.start_marker, end_marker=self.end_marker)
+        with self.assertRaises(AssertionError):
+            b = BlockInFile(block_file, name="block1", start_marker=self.start_marker, end_marker=self.end_marker, contents="foo", ensures="absent")
+        with self.assertRaises(AssertionError):
+            b = BlockInFile(block_file, name="My Funky Block Name!", start_marker=self.start_marker, end_marker=self.end_marker, contents=self.line1)
+
+    def test_block_removal_skipped_when_already_absent(self):
+        block_file = self.root / "test8.txt"
+        block_file.write_text(self.default_contents)
+
+        with patch("wool.BlockInFile.logger") as mock_logger:
+            b = BlockInFile(block_file, name="block1", start_marker=self.start_marker, end_marker=self.end_marker, ensures="absent")
+            b.apply()
+            assert "Skipping" in mock_logger.info.call_args_list[0].kwargs["action"]
+            assert "block does not exist" in mock_logger.info.call_args_list[0].kwargs["because"]
+        assert block_file.read_text() == self.default_contents
+
+    def test_block_removal(self):
+        block_file = self.root / "test9.txt"
+        block_file.write_text(self.default_contents)
+        b = BlockInFile(block_file, name="block1", start_marker=self.start_marker, end_marker=self.end_marker, contents=self.line1)
+        b.apply()
+        assert self.line1 in block_file.read_text()
+        b = BlockInFile(block_file, name="block1", start_marker=self.start_marker, end_marker=self.end_marker, ensures="absent")
+        b.apply()
+        assert self.line1 not in block_file.read_text()
+
+    def test_multiple_blocks(self):
+        block_file = self.root / "test10.txt"
+        block_file.write_text(self.default_contents)
+        b1 = BlockInFile(block_file, name="block1", start_marker=self.start_marker, end_marker=self.end_marker, contents=self.line1)
+        b1.apply()
+        b2 = BlockInFile(block_file, name="block2", start_marker=self.start_marker, end_marker=self.end_marker, contents=self.line2)
+        b2.apply()
+        contents = block_file.read_text()
+        assert self.line1 in contents
+        assert self.line2 in contents
+        b3 = BlockInFile(block_file, name="block1", start_marker=self.start_marker, end_marker=self.end_marker, ensures="absent")
+        b3.apply()
+        contents = block_file.read_text()
+        assert self.line1 not in contents
+        assert self.line2 in contents
+        b4 = BlockInFile(block_file, name="block2", start_marker=self.start_marker, end_marker=self.end_marker, ensures="absent")
+        b4.apply()
+        contents = block_file.read_text()
+        assert self.line1 not in contents
+        assert self.line2 not in contents

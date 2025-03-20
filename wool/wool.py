@@ -345,7 +345,7 @@ class File(Resource):
 
 
 class User(Resource):
-    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    def __init__(
         self,
         username: str,
         group: Optional[str] = None,
@@ -610,6 +610,86 @@ class Symlink(Resource):
             self.logger.info(action="Removed symlink", path=self.path)
         else:
             self.logger.info(action="Skipping removal of symlink", path=self.path, because="does not exist")
+
+
+class BlockInFile(Resource):
+    def __init__(self, path: StrOrPath, name: str, start_marker: str, end_marker: str, contents: Optional[str] = None, ensures: str = "present") -> None:
+        self.path = Path(path).expanduser()
+        self.contents = contents or ""
+        self.ensures = ensures
+        self.name = name
+
+        if self.ensures == "present":
+            assert self.contents, "contents must be specified when ensures=present"
+        else:
+            assert not self.contents, "contents must not be specified when ensures=absent"
+
+        assert self.name.isidentifier(), "name must be a valid identifier"
+        assert "{start}" in start_marker, "start_marker must contain {start}"
+        assert "{end}" in end_marker, "end_marker must contain {end}"
+        start_contents = f"WOOL_BLOCK_START='this block is managed by wool, do not edit these lines' name='{self.name}'"
+        end_contents = f"WOOL_BLOCK_END='this block is managed by wool, do not edit these lines' name='{self.name}'"
+        self.start = start_marker.format(start=start_contents)
+        self.end = end_marker.format(end=end_contents)
+
+        # add double new line at the start of the block
+        if self.start.startswith("\n\n"):
+            pass
+        elif self.start.startswith("\n"):
+            self.start = "\n" + self.start
+        else:
+            self.start = "\n\n" + self.start
+
+        # add a single new line on contents and end of block
+        if not self.start.endswith("\n"):
+            self.start += "\n"
+        if not self.contents.endswith("\n"):
+            self.contents += "\n"
+        self.new_block = self.start + self.contents + self.end
+
+    def _get_current_block(self) -> tuple[Optional[int], Optional[int], Optional[str]]:
+        """
+        Find the managed block in `path` if it exists.
+        Returns (start_idx, end_idx, block_content) or (None, None, None) if not found.
+        """
+        contents = self.path.read_text()
+        try:
+            start_idx = contents.index(self.start)
+            end_idx = contents.index(self.end)
+            block_content = contents[start_idx + len(self.start) : end_idx]
+            return start_idx, end_idx, block_content
+        except ValueError:
+            return None, None, None
+
+    def create(self) -> None:
+        if not self.path.exists():
+            self.logger.info(action="Creating file", path=self.path, name=self.name, because="does not exist")
+            self.path.touch()
+
+        start_idx, end_idx, current = self._get_current_block()
+        if current is None:
+            self.logger.info(action="Appending block to file", path=self.path, name=self.name, because="block does not exist")
+            with self.path.open("a") as f:
+                f.write(self.new_block)
+        elif current.rstrip("\n") == self.contents.rstrip("\n"):
+            self.logger.info(action="Skipping block update", path=self.path, name=self.name, because="block content already matches")
+        else:
+            self.logger.info(action="Updating block in file", path=self.path, name=self.name, because="block content does not match")
+            contents = self.path.read_text()
+            assert isinstance(start_idx, int) and isinstance(end_idx, int)  # for mypy
+            new_contents = contents[:start_idx] + self.new_block + contents[end_idx + len(self.end) :]
+            self.path.write_text(new_contents)
+
+    def destroy(self) -> None:
+        start_idx, end_idx, current = self._get_current_block()
+        if current is None:
+            self.logger.info(action="Skipping block removal", path=self.path, name=self.name, because="block does not exist")
+        else:
+            self.logger.info(action="Removing block", path=self.path, name=self.name, because="block exists")
+            contents = self.path.read_text()
+            assert isinstance(start_idx, int) and isinstance(end_idx, int)  # for mypy
+            new_contents = contents[:start_idx] + contents[end_idx + len(self.end) :]
+            self.path.write_text(new_contents)
 
 
 ## main #######################################################################
