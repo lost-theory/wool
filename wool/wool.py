@@ -647,11 +647,13 @@ class BlockInFile(Resource):
             self.contents += "\n"
         self.new_block = self.start + self.contents + self.end
 
-    def _get_current_block(self) -> tuple[Optional[int], Optional[int], Optional[str]]:
+    def get_current_block(self) -> tuple[Optional[int], Optional[int], Optional[str]]:
         """
         Find the managed block in `path` if it exists.
         Returns (start_idx, end_idx, block_content) or (None, None, None) if not found.
         """
+        if not self.path.exists():
+            return None, None, None
         contents = self.path.read_text()
         try:
             start_idx = contents.index(self.start)
@@ -666,7 +668,7 @@ class BlockInFile(Resource):
             self.logger.info(action="Creating file", path=self.path, name=self.name, because="does not exist")
             self.path.touch()
 
-        start_idx, end_idx, current = self._get_current_block()
+        start_idx, end_idx, current = self.get_current_block()
         if current is None:
             self.logger.info(action="Appending block to file", path=self.path, name=self.name, because="block does not exist")
             with self.path.open("a") as f:
@@ -681,7 +683,7 @@ class BlockInFile(Resource):
             self.path.write_text(new_contents)
 
     def destroy(self) -> None:
-        start_idx, end_idx, current = self._get_current_block()
+        start_idx, end_idx, current = self.get_current_block()
         if current is None:
             self.logger.info(action="Skipping block removal", path=self.path, name=self.name, because="block does not exist")
         else:
@@ -690,6 +692,37 @@ class BlockInFile(Resource):
             assert isinstance(start_idx, int) and isinstance(end_idx, int)  # for mypy
             new_contents = contents[:start_idx] + contents[end_idx + len(self.end) :]
             self.path.write_text(new_contents)
+
+
+class Hostkey(Resource):
+    def __init__(self, known_hosts: StrOrPath, host: str, contents: Optional[str] = None, ensures: str = "present", force: bool = False) -> None:
+        self.known_hosts = Path(known_hosts).expanduser()
+        self.contents = contents or ""
+        self.ensures = ensures
+        self.force = force
+        self.host = host
+        self.block = BlockInFile(
+            path=self.known_hosts,
+            name=self.host.replace(".", "_"),
+            start_marker="# {start}",
+            end_marker="# {end}",
+            contents=self.contents,
+            ensures=self.ensures,
+        )
+
+    def create(self) -> None:
+        _, _, current = self.block.get_current_block()
+        if current is not None and current.rstrip("\n") != self.contents.rstrip("\n"):
+            if not self.force:
+                raise RuntimeError(
+                    f"Hostkey content for host {self.host} would change but force=False. " "Hostkey changes should be manually verified for security. " "Set force=True to override this check."
+                )
+            self.logger.info(action="Forcing hostkey update", path=self.known_hosts, host=self.host, because="hostkey changed and force=True was specified")
+
+        self.block.apply()
+
+    def destroy(self) -> None:
+        self.block.apply()
 
 
 ## main #######################################################################

@@ -33,6 +33,7 @@ from wool.wool import (
     Symlink,
     SymbolicPermissions,
     BlockInFile,
+    Hostkey,
     shell,
     shell_output,
     checksum,
@@ -778,3 +779,55 @@ class TestWoolBlockInFile(WoolFileSystemTestCase):
         contents = block_file.read_text()
         assert self.line1 not in contents
         assert self.line2 not in contents
+
+
+class TestWoolHostkey(WoolFileSystemTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.line1 = "github.com ssh-rsa AAAAB3Nzfoo...wsjk="
+        cls.line2 = "github.com ssh-rsa AAAAB3Nzbar...wsjk="
+
+    def test_hostkey_create_destroy_with_contents(self):
+        hostkey_file = self.root / "known_hosts"
+        h = Hostkey(hostkey_file, host="github.com", contents=self.line1)
+        assert not hostkey_file.exists()
+        h.apply()
+        assert hostkey_file.exists()
+        assert self.line1 in hostkey_file.read_text()
+
+        h = Hostkey(hostkey_file, host="github.com", ensures="absent")
+        h.apply()
+        assert self.line1 not in hostkey_file.read_text()
+
+    def test_hostkey_update_contents_without_force(self):
+        hostkey_file = self.root / "known_hosts_force_false"
+        h1 = Hostkey(hostkey_file, host="github.com", contents=self.line1)
+        h1.apply()
+        h2 = Hostkey(hostkey_file, host="github.com", contents=self.line2)
+        with self.assertRaises(RuntimeError) as context:
+            h2.apply()
+        assert "force=False" in str(context.exception)
+        assert "Hostkey changes should be manually verified" in str(context.exception)
+        assert self.line1 in hostkey_file.read_text()
+        assert self.line2 not in hostkey_file.read_text()
+
+    def test_hostkey_update_contents_with_force(self):
+        hostkey_file = self.root / "known_hosts_force_true"
+        h1 = Hostkey(hostkey_file, host="github.com", contents=self.line1)
+        h1.apply()
+        h2 = Hostkey(hostkey_file, host="github.com", contents=self.line2, force=True)
+        h2.apply()
+        assert self.line1 not in hostkey_file.read_text()
+        assert self.line2 in hostkey_file.read_text()
+
+    def test_hostkey_no_change_when_content_matches(self):
+        hostkey_file = self.root / "known_hosts_skip"
+        h1 = Hostkey(hostkey_file, host="github.com", contents=self.line1)
+        h1.apply()
+
+        with patch("wool.BlockInFile.logger") as mock_logger:
+            h2 = Hostkey(hostkey_file, host="github.com", contents=self.line1)
+            h2.apply()
+            assert "Skipping" in mock_logger.info.call_args_list[0].kwargs["action"]
+            assert "already matches" in mock_logger.info.call_args_list[0].kwargs["because"]
