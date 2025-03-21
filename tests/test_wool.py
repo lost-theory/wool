@@ -800,6 +800,30 @@ class TestWoolHostkey(WoolFileSystemTestCase):
         h.apply()
         assert self.line1 not in hostkey_file.read_text()
 
+    @patch("wool.wool.fetch_host_keys")
+    def test_hostkey_fetch_remote(self, mock_fetch):
+        mock_fetch.return_value = "github.com ssh-rsa AAAAB3Nzbaz...key=\n"
+
+        hostkey_file = self.root / "known_hosts_fetch"
+        h = Hostkey(hostkey_file, host="github.com")
+        h.apply()
+
+        mock_fetch.assert_called_once_with("github.com")
+
+        assert hostkey_file.exists()
+        assert "baz" in hostkey_file.read_text()
+
+    def test_hostkey_fetch_keys_failure(self):
+        hostkey_file = self.root / "known_hosts_fetch_fail"
+        bad_host = f"{uniq()}.invalid"
+        h = Hostkey(hostkey_file, host=bad_host)
+
+        with self.assertRaises(RuntimeError) as context:
+            h.apply()
+
+        assert "failed for host" in str(context.exception)
+        assert bad_host in str(context.exception)
+
     def test_hostkey_update_contents_without_force(self):
         hostkey_file = self.root / "known_hosts_force_false"
         h1 = Hostkey(hostkey_file, host="github.com", contents=self.line1)
@@ -811,6 +835,21 @@ class TestWoolHostkey(WoolFileSystemTestCase):
         assert "Hostkey changes should be manually verified" in str(context.exception)
         assert self.line1 in hostkey_file.read_text()
         assert self.line2 not in hostkey_file.read_text()
+
+    @patch("subprocess.run")
+    def test_hostkey_fetch_then_force_update(self, mock_run):
+        mock_run.return_value = MagicMock(stdout="github.com ssh-rsa AAAAB3Nzqux...key=\n", stderr="", returncode=0)
+        hostkey_file = self.root / "known_hosts_fetch_then_update"
+
+        h1 = Hostkey(hostkey_file, host="github.com")
+        h1.apply()
+        assert "qux" in hostkey_file.read_text()
+        assert self.line1 not in hostkey_file.read_text()
+
+        h2 = Hostkey(hostkey_file, host="github.com", contents=self.line1, force=True)
+        h2.apply()
+        assert "qux" not in hostkey_file.read_text()
+        assert self.line1 in hostkey_file.read_text()
 
     def test_hostkey_update_contents_with_force(self):
         hostkey_file = self.root / "known_hosts_force_true"
@@ -826,8 +865,8 @@ class TestWoolHostkey(WoolFileSystemTestCase):
         h1 = Hostkey(hostkey_file, host="github.com", contents=self.line1)
         h1.apply()
 
-        with patch("wool.BlockInFile.logger") as mock_logger:
+        with patch("wool.Hostkey.logger") as mock_logger:
             h2 = Hostkey(hostkey_file, host="github.com", contents=self.line1)
             h2.apply()
             assert "Skipping" in mock_logger.info.call_args_list[0].kwargs["action"]
-            assert "already matches" in mock_logger.info.call_args_list[0].kwargs["because"]
+            assert "blocks already match" in mock_logger.info.call_args_list[0].kwargs["because"]

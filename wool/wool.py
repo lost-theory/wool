@@ -157,6 +157,17 @@ def apt_pkg_is_installed(name: str) -> bool:
     return result
 
 
+def fetch_host_keys(host: str) -> str:
+    (status, out, _) = shell_output(["ssh-keyscan", host])
+    if status != 0:
+        raise RuntimeError(f"Fetching hostkeys via ssh-keyscan failed for host {host} with status={status}.")
+    out = out.strip()
+    if not out:
+        raise RuntimeError(f"No hostkeys found by ssh-keyscan for host {host}.")
+    keys = [line for line in out.splitlines() if not line.startswith("#")]
+    return "\n".join(sorted(keys))
+
+
 @dataclass(frozen=True)
 class SymbolicPermissions:  # pylint: disable=too-many-instance-attributes
     mode: int
@@ -697,11 +708,13 @@ class BlockInFile(Resource):
 class Hostkey(Resource):
     def __init__(self, known_hosts: StrOrPath, host: str, contents: Optional[str] = None, ensures: str = "present", force: bool = False) -> None:
         self.known_hosts = Path(known_hosts).expanduser()
-        self.contents = contents or ""
+        self.contents = contents
         self.ensures = ensures
         self.force = force
         self.host = host
-        self.block = BlockInFile(
+
+    def _make_block_resource(self) -> BlockInFile:
+        return BlockInFile(
             path=self.known_hosts,
             name=self.host.replace(".", "_"),
             start_marker="# {start}",
@@ -711,18 +724,32 @@ class Hostkey(Resource):
         )
 
     def create(self) -> None:
-        _, _, current = self.block.get_current_block()
-        if current is not None and current.rstrip("\n") != self.contents.rstrip("\n"):
-            if not self.force:
-                raise RuntimeError(
-                    f"Hostkey content for host {self.host} would change but force=False. " "Hostkey changes should be manually verified for security. " "Set force=True to override this check."
-                )
-            self.logger.info(action="Forcing hostkey update", path=self.known_hosts, host=self.host, because="hostkey changed and force=True was specified")
+        # Fetch keys if contents is None
+        if self.contents is None:
+            self.logger.info(action="Fetching host keys", host=self.host, because="no `contents` passed")
+            self.contents = fetch_host_keys(self.host)
 
-        self.block.apply()
+        block = self._make_block_resource()
+        _, _, current = block.get_current_block()
+
+        if current is None:
+            self.logger.info(action="Adding hostkey block", path=self.known_hosts, host=self.host, because="hostkey block doesn't exist")
+            block.apply()
+            return
+
+        blocks_match = current.rstrip("\n") == self.contents.rstrip("\n")
+        if blocks_match:
+            self.logger.info(action="Skipping hostkey block update", path=self.known_hosts, host=self.host, because="blocks already match")
+        elif not blocks_match and self.force:
+            self.logger.info(action="Forcing hostkey update", path=self.known_hosts, host=self.host, because="hostkey changed and `force=True` was specified")
+            block.apply()
+        else:
+            raise RuntimeError(f"Hostkey content for host {self.host} would change but force=False. Hostkey changes should be manually verified for security. Set force=True to override this check.")
 
     def destroy(self) -> None:
-        self.block.apply()
+        self.logger.info(action="Applying removal of hostkey block", path=self.known_hosts, host=self.host, because="`ensures` was set to `absent`")
+        block = self._make_block_resource()
+        block.apply()
 
 
 ## main #######################################################################
