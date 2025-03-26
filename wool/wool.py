@@ -355,6 +355,17 @@ class File(Resource):
             self.logger.info(action="Skipping removal", path=self.path, because="file does not exist")
 
 
+class Touch(SimpleResource):
+    def __init__(self, path: StrOrPath) -> None:
+        self.path = Path(path).expanduser()
+
+    def apply(self) -> None:
+        if not self.path.exists():
+            self.path.touch()
+        else:
+            self.logger.info(action="Skipping touch", path=self.path, because="file already exists")
+
+
 class User(Resource):
     def __init__(
         self,
@@ -504,8 +515,8 @@ class Virtualenv(SimpleResource):
 
 
 class Command(SimpleResource):
-    def __init__(self, cmd: list[StrOrPath], provides: Optional[StrOrPath] = None) -> None:
-        self.cmd = list(cmd)
+    def __init__(self, cmd: Sequence[StrOrPath], provides: Optional[StrOrPath] = None) -> None:
+        self.cmd = cmd
         self.provides = Path(provides).expanduser() if provides else None
 
     def apply(self) -> None:
@@ -753,6 +764,14 @@ class Hostkey(Resource):
 
 
 ## main #######################################################################
+
+
+def run_task_as_user(calling_script: str, task_name: str, user: str) -> None:
+    """Run a wool task as a specific user via sudo."""
+    assert task_name.isidentifier(), f"Invalid task name: {task_name!r}"
+    cmd = ["sudo", "-u", user, sys.executable, calling_script, "--task", task_name, "--apply"]
+    logger.info(action="Running task as user", task_name=task_name, user=user, cmd=cmd)
+    Command(cmd).apply()
 
 
 def wool_apply(task_name: str, tasks: Mapping[str, Callable[[], None]]) -> None:

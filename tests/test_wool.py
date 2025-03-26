@@ -12,6 +12,7 @@ import string
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +35,7 @@ from wool.wool import (
     SymbolicPermissions,
     BlockInFile,
     Hostkey,
+    Touch,
     shell,
     shell_output,
     checksum,
@@ -293,33 +295,61 @@ class TestWoolFile(WoolFileSystemTestCase):
 class TestWoolResources(WoolFileSystemTestCase):
 
     def test_user_create_destroy(self):
+        # create
         name = f"test-{self.timestamp}-{uniq()}"
-        u = User(
-            name,
-            system=True,
-            shell_bin="/sbin/nologin",
-            home=self.root / "home",
-            group="floppy",
-            groups=["cdrom"],
-        )
-        assert not u.exists()
-        u.apply()
-        assert u.exists()
-        u = User(name, ensures="absent")
-        assert u.exists()
-        u.apply()
-        assert not u.exists()
+        create_args = dict(system=True, shell_bin="/sbin/nologin", home=self.root / "home", group="floppy", groups=["cdrom"])
+        u1 = User(name, **create_args)
+        assert not u1.exists()
+        u1.apply()
+        assert u1.exists()
+
+        # create again with same args to verify creation is skipped
+        with self.assertLogs(level="INFO") as logs:
+            u2 = User(name, **create_args)
+            u2.apply()
+        assert "Skipping user creation" in "\n".join(logs.output)
+        assert "user already exists" in "\n".join(logs.output)
+
+        # destroy
+        u3 = User(name, ensures="absent")
+        assert u3.exists()
+        u3.apply()
+        assert not u3.exists()
+
+        # destroy again to verify destroy is skipped
+        with self.assertLogs(level="INFO") as logs:
+            u4 = User(name, ensures="absent")
+            u4.apply()
+        assert "Skipping user deletion" in "\n".join(logs.output)
+        assert "user doesn't exist" in "\n".join(logs.output)
 
     def test_group_create_destroy(self):
+        # create
         name = f"tgrp-{self.timestamp}-{uniq()}"
-        g = Group(name, system=True)
-        assert not g.exists()
-        g.apply()
-        assert g.exists()
-        g = Group(name, ensures="absent")
-        assert g.exists()
-        g.apply()
-        assert not g.exists()
+        g1 = Group(name, system=True)
+        assert not g1.exists()
+        g1.apply()
+        assert g1.exists()
+
+        # create again with same args to verify creation is skipped
+        with self.assertLogs(level="INFO") as logs:
+            g2 = Group(name, system=True)
+            g2.apply()
+        assert "Skipping group creation" in "\n".join(logs.output)
+        assert "group already exists" in "\n".join(logs.output)
+
+        # destroy
+        g3 = Group(name, ensures="absent")
+        assert g3.exists()
+        g3.apply()
+        assert not g3.exists()
+
+        # destroy again to verify destroy is skipped
+        with self.assertLogs(level="INFO") as logs:
+            g4 = Group(name, ensures="absent")
+            g4.apply()
+        assert "Skipping group deletion" in "\n".join(logs.output)
+        assert "group doesn't exist" in "\n".join(logs.output)
 
     @patch("wool.wool.apt_pkg_is_installed")
     @patch("wool.wool.apt_pkg_install")
@@ -349,18 +379,33 @@ class TestWoolResources(WoolFileSystemTestCase):
 
     def test_download(self):
         dest = self.root / "robots.txt"
-        d = Download("http://lost-theory.org/robots.txt", dest)
+        url = "http://lost-theory.org/robots.txt"
+        d1 = Download(url, dest)
         assert not dest.is_file()
-        d.apply()
+        d1.apply()
         assert dest.is_file()
+
+        # verify skipping when file already exists
+        with self.assertLogs(level="INFO") as logs:
+            d2 = Download(url, dest)
+            d2.apply()
+        assert "Skipping download" in "\n".join(logs.output)
+        assert "already exists" in "\n".join(logs.output)
 
     def test_virtualenv(self):
         dest = self.root / "testing-env"
-        v = Virtualenv(sys.executable, dest)
+        v1 = Virtualenv(sys.executable, dest)
         assert not dest.is_dir()
-        v.apply()
+        v1.apply()
         assert dest.is_dir()
-        assert v.pip_path.is_file()
+        assert v1.pip_path.is_file()
+
+        # verify skipping when virtualenv already exists
+        with self.assertLogs(level="INFO") as logs:
+            v2 = Virtualenv(sys.executable, dest)
+            v2.apply()
+        assert "Skipping venv creation" in "\n".join(logs.output)
+        assert "already exists" in "\n".join(logs.output)
 
     def test_command(self):
         dest = self.root / "test-command-output.txt"
@@ -870,3 +915,30 @@ class TestWoolHostkey(WoolFileSystemTestCase):
             h2.apply()
             assert "Skipping" in mock_logger.info.call_args_list[0].kwargs["action"]
             assert "blocks already match" in mock_logger.info.call_args_list[0].kwargs["because"]
+
+
+class TestWoolTouch(WoolFileSystemTestCase):
+    def test_touch_new_file(self):
+        target = self.root / "new-touch-file"
+        assert not target.exists()
+
+        t = Touch(target)
+        t.apply()
+
+        assert target.exists() and target.is_file()
+        assert target.stat().st_size == 0, "Touched file should be empty"
+
+    def test_touch_existing_file(self):
+        target = self.root / "existing-touch-file"
+        target.write_text("existing content")
+        original_mtime = target.stat().st_mtime
+        time.sleep(0.1)  # wait a bit to ensure mtime would change if the file was touched
+
+        with self.assertLogs(level="INFO") as logs:
+            t = Touch(target)
+            t.apply()
+
+        assert target.exists() and target.is_file()
+        assert "Skipping touch" in "\n".join(logs.output)
+        assert str(target) in "\n".join(logs.output)
+        assert target.stat().st_mtime == original_mtime, "mtime should not have changed since we skipped the touch"

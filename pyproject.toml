@@ -40,7 +40,7 @@ preview = 1
 
 [tool.pylint]
 max-line-length = 200
-disable = ["missing-function-docstring", "missing-class-docstring", "too-few-public-methods", "too-many-arguments", "too-many-positional-arguments", "unspecified-encoding"]
+disable = ["missing-function-docstring", "missing-class-docstring", "too-few-public-methods", "too-many-arguments", "too-many-positional-arguments", "unspecified-encoding", "use-dict-literal"]
 
 [tool.mypy]
 files = "."
