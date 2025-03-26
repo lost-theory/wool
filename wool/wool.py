@@ -515,15 +515,16 @@ class Virtualenv(SimpleResource):
 
 
 class Command(SimpleResource):
-    def __init__(self, cmd: Sequence[StrOrPath], provides: Optional[StrOrPath] = None) -> None:
+    def __init__(self, cmd: Sequence[StrOrPath], provides: Optional[StrOrPath] = None, **kwargs: Any) -> None:
         self.cmd = cmd
         self.provides = Path(provides).expanduser() if provides else None
+        self.kwargs = kwargs
 
     def apply(self) -> None:
         if self.provides and self.provides.exists():
             self.logger.info(action="Skipping command run", cmd=self.cmd, provides=self.provides, because="`provides` already exists")
             return
-        shell(self.cmd)
+        shell(self.cmd, **self.kwargs)
 
 
 class Owner(SimpleResource):
@@ -560,7 +561,7 @@ class Owner(SimpleResource):
                 self.logger.info(action="Skipping ownership change", path=self.path, because="already has correct ownership")
                 return
 
-        shell(["sudo", "chown"] + recursive_flag + [f"{uid}:{gid}", self.path])
+        shell(["chown"] + recursive_flag + [f"{uid}:{gid}", self.path])
 
 
 class Perms(SimpleResource):
@@ -608,11 +609,11 @@ class Symlink(Resource):
         self.ensures = ensures
 
     def create(self) -> None:
-        if not self.src.exists():
-            self.logger.warning(src=self.src, msg="`src` does not exist, but will create symlink anyway")
-
         if self.path.exists() and not self.path.is_symlink():
             raise RuntimeError(f"Cannot create symlink at {self.path!r} because a file or directory already exists there.")
+
+        if not self.src.exists():
+            self.logger.warning(src=self.src, msg="`src` does not exist, but will create symlink anyway")
 
         if self.path.is_symlink():
             current_src = Path(os.readlink(self.path))
