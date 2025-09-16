@@ -24,8 +24,8 @@ dev = []
 
 [project.urls]
 
-bugs = "https://github.com/lost-theory/uninfra/issues"
-homepage = "https://github.com/lost-theory/uninfra"
+bugs = "https://github.com/lost-theory/wool/issues"
+homepage = "https://github.com/lost-theory/wool"
 
 [tool.setuptools]
 package-dir = {"" = "wool"}
