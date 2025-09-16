@@ -414,6 +414,9 @@ class User(Resource):
             cmd.append(self.username)
             shell(cmd)
 
+        # TODO: changes to self.system, self.shell, self.home, self.primary_group settings are all skipped if the user already exists
+        # TODO: need extra logic here for detecting differences for these configs and use `usermod` to set these when they don't match
+
         if self.wanted_groups:
             current_groups = self.get_current_groups()
             groups_to_add = set(self.wanted_groups) - set(current_groups)
