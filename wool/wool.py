@@ -136,11 +136,15 @@ def file_needs_update(src: StrOrPath, dst: StrOrPath) -> bool:
 
 
 def apt_pkg_install(name: str) -> None:
-    shell(["sudo", "apt-get", "install", "-y", name])
+    env = os.environ.copy()
+    env["DEBIAN_FRONTEND"] = "noninteractive"
+    shell(["sudo", "apt-get", "install", "-y", name], env=env)
 
 
 def apt_pkg_remove(name: str) -> None:
-    shell(["sudo", "apt-get", "remove", "-y", name])
+    env = os.environ.copy()
+    env["DEBIAN_FRONTEND"] = "noninteractive"
+    shell(["sudo", "apt-get", "remove", "-y", name], env=env)
 
 
 def apt_pkg_is_installed(name: str) -> bool:
