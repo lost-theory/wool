@@ -37,6 +37,8 @@ STAT_MODE_MASKS = [
     stat.S_ISVTX,
 ]
 
+APT_LOCK_TIMEOUT = 600
+
 ## logging setup ##############################################################
 
 STRUCTURED_LOG_ORDER_BEGINNING_KEYS = ["action", "cmd", "kw", "path", "src"]
@@ -138,27 +140,18 @@ def file_needs_update(src: StrOrPath, dst: StrOrPath) -> bool:
 def apt_pkg_install(name: str) -> None:
     env = os.environ.copy()
     env["DEBIAN_FRONTEND"] = "noninteractive"
-    shell(["sudo", "apt-get", "install", "-y", name], env=env)
+    shell(["sudo", "apt-get", "-o", f"DPkg::Lock::Timeout={APT_LOCK_TIMEOUT}", "install", "-y", name], env=env)
 
 
 def apt_pkg_remove(name: str) -> None:
     env = os.environ.copy()
     env["DEBIAN_FRONTEND"] = "noninteractive"
-    shell(["sudo", "apt-get", "remove", "-y", name], env=env)
+    shell(["sudo", "apt-get", "-o", f"DPkg::Lock::Timeout={APT_LOCK_TIMEOUT}", "remove", "-y", name], env=env)
 
 
 def apt_pkg_is_installed(name: str) -> bool:
-    (status, out, err) = shell_output(["dpkg-query", "-W", "-f='${Status}'", name])
-    result = False
-    if "ok installed" in out:
-        result = True
-    elif "ok not-installed" in out:
-        result = False
-    elif status != 0 and "no packages found matching" in err:
-        result = False
-    else:
-        raise RuntimeError(f"Unable to parse dkpg-query result: {[status, out, err]}.")
-    return result
+    (status, out, err) = shell_output(["dpkg-query", "-W", "-f=${db:Status-Abbrev}", name])
+    return out.strip() == "ii"
 
 
 def fetch_host_keys(host: str) -> str:
