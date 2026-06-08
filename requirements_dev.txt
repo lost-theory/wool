@@ -1,8 +1,0 @@
-pip<26
-coverage<7.7
-pytest<8.4
-pytest-cov==6.0.0
-black<26.0
-pylint<3.4
-flake8<7.2
-mypy<1.16.0

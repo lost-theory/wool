@@ -227,6 +227,15 @@ Run across multiple machines in parallel? Use your favorite distributed executio
 
 Manage secrets? Store them in your wool project (or wherever) as encrypted text (e.g. via git-crypt, gpg, age, etc.), load the decrypted values into memory inside your tasks, and then use them.
 
+## Development
+
+Install [uv](https://docs.astral.sh/uv/), then:
+
+```bash
+uv sync
+uv run precommit.py  # runs isort, black, flake8, pylint, mypy, pyrefly, and pytest
+```
+
 ## License
 
 Wool is free software under the MIT license.

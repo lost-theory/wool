@@ -16,7 +16,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Union, Mapping, Any, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence, Union
 
 StrOrPath = Union[str, Path]
 
@@ -150,12 +150,12 @@ def apt_pkg_remove(name: str) -> None:
 
 
 def apt_pkg_is_installed(name: str) -> bool:
-    (status, out, err) = shell_output(["dpkg-query", "-W", "-f=${db:Status-Abbrev}", name])
+    _, out, _ = shell_output(["dpkg-query", "-W", "-f=${db:Status-Abbrev}", name])
     return out.strip() == "ii"
 
 
 def fetch_host_keys(host: str) -> str:
-    (status, out, _) = shell_output(["ssh-keyscan", host])
+    status, out, _ = shell_output(["ssh-keyscan", host])
     if status != 0:
         raise RuntimeError(f"Fetching hostkeys via ssh-keyscan failed for host {host} with status={status}.")
     out = out.strip()
@@ -782,7 +782,7 @@ def wool_apply(task_name: str, tasks: Mapping[str, Callable[[], None]]) -> None:
 
 def wool_push(calling_script: str, remote: str, task_name: str, local_project: Optional[str] = None) -> None:
     # Remote python version check
-    (_, output, _) = shell_output(["ssh", "-A", remote, "python3 -c 'import platform; print(tuple(map(int, platform.python_version_tuple())) >= (3, 6, 0))'"])
+    _, output, _ = shell_output(["ssh", "-A", remote, "python3 -c 'import platform; print(tuple(map(int, platform.python_version_tuple())) >= (3, 6, 0))'"])
     assert output.strip() == "True", "Invalid remote python version. Need >=3.6.0."
 
     # Rsync up local project directory if specified
