@@ -25,7 +25,7 @@ def main() -> None:
         ("pylint", run("pylint", [BIN / "pylint", "wool/"])),
         ("mypy", run("mypy", [BIN / "mypy", "--strict", "."])),
         ("pyrefly", run("pyrefly", [BIN / "pyrefly", "check", "--summary=full"])),
-        ("pytest", run("pytest", [BIN / "pytest", "tests/"])),
+        ("pytest", run("pytest", [BIN / "pytest", "tests/", "--cov=wool", "--cov-report=html", "--cov-fail-under=90"])),
     ]
 
     print("\n== Results ==")

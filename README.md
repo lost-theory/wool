@@ -47,6 +47,8 @@ Structured logging:
 
 - All logging output from Resources is structured data for visibility into what actions are being taken and why they're being skipped or executed.
 
+Code coverage: >=90% code coverage.
+
 ## Usage
 
 No installation required. Just copy `wool.py` to your project or destination machine, import it, and write your tasks. Or, if you're using the optional `wool_main` function to execute your tasks, you can use the `--push` option described above.
