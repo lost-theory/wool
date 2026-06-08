@@ -782,8 +782,8 @@ def wool_apply(task_name: str, tasks: Mapping[str, Callable[[], None]]) -> None:
 
 def wool_push(calling_script: str, remote: str, task_name: str, local_project: Optional[str] = None) -> None:
     # Remote python version check
-    _, output, _ = shell_output(["ssh", "-A", remote, "python3 -c 'import platform; print(tuple(map(int, platform.python_version_tuple())) >= (3, 6, 0))'"])
-    assert output.strip() == "True", "Invalid remote python version. Need >=3.6.0."
+    _, output, _ = shell_output(["ssh", "-A", remote, "python3 -c 'import platform; print(tuple(map(int, platform.python_version_tuple())) >= (3, 10, 0))'"])
+    assert output.strip() == "True", "Invalid remote python version. Need >=3.10.0."
 
     # Rsync up local project directory if specified
     shell(["ssh", remote, f"mkdir -p {PROJECT}"])
