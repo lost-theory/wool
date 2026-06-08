@@ -39,10 +39,10 @@ bugs = "https://github.com/lost-theory/wool/issues"
 homepage = "https://github.com/lost-theory/wool"
 
 [tool.setuptools]
-package-dir = {"" = "wool"}
+packages = ["wool"]
 
 [tool.setuptools.package-data]
-"*" = ["*.*"]
+"wool" = ["py.typed"]
 
 
 [tool.black]
