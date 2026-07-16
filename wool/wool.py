@@ -501,6 +501,13 @@ class AptPackage(Resource):
             self.logger.info(action="Skipping package removal", name=self.name, because="not installed")
 
 
+class AptUpdate(SimpleResource):
+    def apply(self) -> None:
+        env = os.environ.copy()
+        env["DEBIAN_FRONTEND"] = "noninteractive"
+        shell(["apt-get", "-o", f"DPkg::Lock::Timeout={APT_LOCK_TIMEOUT}", "update", "-q"], env=env)
+
+
 class Virtualenv(SimpleResource):
     def __init__(self, python_bin: StrOrPath, path: StrOrPath) -> None:
         self.python_bin = Path(python_bin).expanduser()

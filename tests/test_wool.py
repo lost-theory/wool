@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 
 from wool.wool import (
     AptPackage,
+    AptUpdate,
     BlockInFile,
     Command,
     Directory,
@@ -361,6 +362,12 @@ class TestWoolResources(WoolFileSystemTestCase):
             g4.apply()
         assert "Skipping group deletion" in "\n".join(logs.output)
         assert "group doesn't exist" in "\n".join(logs.output)
+
+    @patch("wool.wool.shell")
+    def test_apt_update(self, f_shell: Any) -> None:
+        AptUpdate().apply()
+        assert f_shell.called and f_shell.call_count == 1
+        assert "Timeout" in repr(f_shell.call_args.args[0])
 
     @patch("wool.wool.apt_pkg_is_installed")
     @patch("wool.wool.apt_pkg_install")

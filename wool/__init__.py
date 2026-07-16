@@ -6,6 +6,7 @@ __version__ = "0.0.1"
 
 from .wool import (
     AptPackage,
+    AptUpdate,
     BlockInFile,
     Command,
     Directory,
@@ -28,6 +29,7 @@ from .wool import (
 
 __all__ = [
     "AptPackage",
+    "AptUpdate",
     "BlockInFile",
     "Command",
     "Directory",
