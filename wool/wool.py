@@ -13,6 +13,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -106,7 +107,8 @@ logger = StructuredLogger(parent_logger)
 
 def shell(cmd: Sequence[StrOrPath], **kw: Any) -> None:
     """Runs `cmd`, raising an error if it fails."""
-    logger.info(action="Running", cmd=cmd, kw=kw)
+    printable_kw = {k: "...snip..." if k == "env" else v for (k, v) in kw.items()}
+    logger.info(action="Running", cmd=cmd, kw=printable_kw)
     subprocess.check_call(cmd, **kw)
 
 
@@ -115,7 +117,8 @@ def shell_output(cmd: Sequence[StrOrPath], **kw: Any) -> tuple[int, str, str]:
     Runs `cmd`, returning (returncode, stdout, stderr). Does not raise an error
     on command failure.
     """
-    logger.info(action="Running", cmd=cmd, kw=kw)
+    printable_kw = {k: "...snip..." if k == "env" else v for (k, v) in kw.items()}
+    logger.info(action="Running", cmd=cmd, kw=printable_kw)
     result = subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kw)
     return (result.returncode, result.stdout, result.stderr)
 
@@ -502,10 +505,20 @@ class AptPackage(Resource):
 
 
 class AptUpdate(SimpleResource):
+    _RETRY_INTERVAL = 5
+
     def apply(self) -> None:
         env = os.environ.copy()
         env["DEBIAN_FRONTEND"] = "noninteractive"
-        shell(["apt-get", "-o", f"DPkg::Lock::Timeout={APT_LOCK_TIMEOUT}", "update", "-q"], env=env)
+        deadline = time.monotonic() + APT_LOCK_TIMEOUT
+        while True:
+            returncode, _stdout, _stderr = shell_output(["apt-get", "update", "-q"], env=env)
+            if returncode == 0:
+                return
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"apt-get update failed after {APT_LOCK_TIMEOUT=} (lock contention)")
+            logger.info(action="apt-get update failed, retrying", reason="lock contention", retry_in=self._RETRY_INTERVAL)
+            time.sleep(self._RETRY_INTERVAL)
 
 
 class Virtualenv(SimpleResource):
@@ -833,6 +846,6 @@ def wool_main(calling_script: str, tasks: Mapping[str, Callable[[], None]]) -> N
         parser.print_help()
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     print("Wool is a library, not a framework or script. You need to import wool_main from your own code.")
     sys.exit(1)

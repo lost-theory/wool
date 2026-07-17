@@ -11,6 +11,7 @@
 * [TODO] Virtualenv resource should run `python -mensurepip --upgrade` if `bin/pip` doesn't exist.
 * [TODO] Wool via `wool_main` should have some built-in way to accept args. I think it'd work to expose the ArgumentParser and let the user add their own arguments.
 * [TODO] Diff mode.
+* [TODO] New `AptPackages` resource (or let AptPackage take a list) for speeding up install of many packages at once.
 
 # Systemd resource ideas
 

@@ -43,6 +43,7 @@ from wool.wool import (
     file_needs_update,
     shell,
     shell_output,
+    wool_main,
 )
 
 TEST_FILE_SRC = "Hello world from src!\n"
@@ -363,11 +364,12 @@ class TestWoolResources(WoolFileSystemTestCase):
         assert "Skipping group deletion" in "\n".join(logs.output)
         assert "group doesn't exist" in "\n".join(logs.output)
 
-    @patch("wool.wool.shell")
-    def test_apt_update(self, f_shell: Any) -> None:
+    @patch("wool.wool.shell_output", return_value=(0, "", ""))
+    def test_apt_update(self, f_shell_output: Any) -> None:
         AptUpdate().apply()
-        assert f_shell.called and f_shell.call_count == 1
-        assert "Timeout" in repr(f_shell.call_args.args[0])
+        assert f_shell_output.call_count == 1
+        assert f_shell_output.call_args.args[0] == ["apt-get", "update", "-q"]
+        assert f_shell_output.call_args.kwargs["env"]["DEBIAN_FRONTEND"] == "noninteractive"
 
     @patch("wool.wool.apt_pkg_is_installed")
     @patch("wool.wool.apt_pkg_install")
@@ -973,3 +975,10 @@ class TestWoolTouch(WoolFileSystemTestCase):
         assert "Skipping touch" in "\n".join(logs.output)
         assert str(target) in "\n".join(logs.output)
         assert target.stat().st_mtime == original_mtime, "mtime should not have changed since we skipped the touch"
+
+
+class TestWoolCli(unittest.TestCase):
+
+    def test_wool_main(self) -> None:
+        with patch("sys.argv", ["foo.py", "--task=task1"]):
+            wool_main("foo.py", {"task1": lambda: None})
