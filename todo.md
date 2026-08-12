@@ -13,6 +13,11 @@
 * [TODO] Wool via `wool_main` should have some built-in way to accept args. I think it'd work to expose the ArgumentParser and let the user add their own arguments.
 * [TODO] Diff mode.
 * [TODO] New `AptPackages` resource (or let AptPackage take a list) for speeding up install of many packages at once.
+* [TODO] Add functionality to `AptPackage` to specify versions, e.g.:
+  * `AptPackage("curl")` (equivalent to `apt install -y curl`, what we do now, only runs once, no upgrade)
+  * `AptPackage("caddy", min_version="2.11.4")` (ensure at least this version is installed, use `dpkg --compare-versions` for the comparison)
+  * `AptPackage("caddy", ensures="latest")` (always try upgrading to the latest version on every wool run)
+  * The main use case is: Operator specifies a minimum version, wool installs it and fails if the installed version is less than this version, and subsequent `apt upgrade` -> wool run cycles do not downgrade the package.
 
 # Systemd resource ideas
 
